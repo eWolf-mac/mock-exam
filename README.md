@@ -5,8 +5,8 @@
 
 | 目录 | 实现 | 状态 |
 | --- | --- | --- |
-| `web/` | **PWA**（原生 ES Module，零依赖、零构建），iPhone Safari 可添加到主屏幕、可离线 | **v2，已跑通并截图验收** |
-| `ios/` | SwiftUI 原生 Xcode 工程（iOS 17+） | **v1 源码，尚未同步 v2 功能，且未在 Mac 上编译** |
+| `web/` | **PWA**（原生 ES Module，零依赖、零构建），iPhone Safari 可添加到主屏幕、可离线 | **v2，唯一在维护的版本** |
+| `ios/` | SwiftUI 原生 Xcode 工程（iOS 17+） | **v1 存档**：未同步 v2、未编译验证，详见 [ios/README.md](ios/README.md) |
 | `docs/` | 产品与数据规格、部署说明、UI 截图 | — |
 
 需求与数据模型见 [`docs/SPEC.md`](docs/SPEC.md)；上线部署见 [`docs/DEPLOY-GITHUB-PAGES.md`](docs/DEPLOY-GITHUB-PAGES.md)。
@@ -117,7 +117,7 @@ tools/                本地服务器、测试、截图、图标脚本
 
 ## 5. 已知限制
 
-- **iOS 原生版还是 v1**：没有二级模块、考试模版、题目数计分、建议用时；且这份工程在 Windows 上生成，未编译验证。
+- **iOS 原生版是 v1 存档**：功能停在 v1、从未用 Xcode 编译验证；项目目前只维护 PWA。
 - Web 版在 iOS 上不能震动，到点提醒靠提示音 + 界面高亮。
 - 完全离线需要 HTTPS（GitHub Pages 即可）。
 - 分数只接受非负数；正确题数超过题目数只做软提示，不强制。
