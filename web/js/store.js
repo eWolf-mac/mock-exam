@@ -125,6 +125,7 @@ function normalize(raw) {
       clockMode: settingsRaw.clockMode === 'analog' ? 'analog' : 'digital',
       sound: settingsRaw.sound !== false,
       keepAwake: settingsRaw.keepAwake !== false,
+      suggestWarn: settingsRaw.suggestWarn !== false,
       lastSetup: Object.assign({}, base.settings.lastSetup, settingsRaw.lastSetup || {}),
     },
     templates: Array.isArray(raw.templates) && raw.templates.length

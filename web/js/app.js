@@ -2,7 +2,7 @@
  * app.js —— 界面与交互（原生视图切换，无框架）
  */
 import {
-  fmtHMS, fmtMS, fmtHuman, fmtMinutes, msToHM, msToHMS, fmtScore, pct, esc, uid, clamp, cnNum,
+  fmtHMS, fmtMS, fmtHuman, fmtMinutes, msToHM, msToHMS, fmtScore, fmtPerQuestion, pct, esc, uid, clamp, cnNum,
   parseHM, durationFor, numOrNull, virtualNow, remainingMs, elapsedWall, analyze, reportText,
   defaultModules, MODULE_COLORS, allSteps, currentStep, completeCurrentStep, undoLastStep,
   closeCurrentStep, isModuleDone, hasChildren, moduleScore, moduleMaxScore, moduleSuggestedMs,
@@ -25,6 +25,8 @@ const ui = {
   flash: null,
   timer: null,
   ending: false,
+  warned: {},
+  trendMode: 'score',
 };
 
 const views = {};
@@ -157,6 +159,10 @@ views.home = () => {
       <label class="switch-row">
         <span>考试中保持屏幕常亮</span>
         <input type="checkbox" data-setting="keepAwake" ${data.settings.keepAwake ? 'checked' : ''}>
+      </label>
+      <label class="switch-row">
+        <span>建议用时提醒（剩 5 分钟 / 超时各响一次）</span>
+        <input type="checkbox" data-setting="suggestWarn" ${data.settings.suggestWarn === false ? '' : 'checked'}>
       </label>
       <div class="btn-row">
         <button class="btn ghost small" data-act="export">导出备份</button>
@@ -530,7 +536,7 @@ views.result = () => {
               .map(
                 (r) => `<tr>
                   <td class="t-name">${esc(r.name)}</td>
-                  <td>${fmtMS(r.ms)}</td>
+                  <td>${fmtMS(r.ms)}${r.avgPerQuestionMs != null ? `<small>${fmtPerQuestion(r.avgPerQuestionMs)}/题</small>` : ''}</td>
                   <td class="${r.overrunMs > 0 ? 'over' : ''}">${r.suggestedMs != null ? (r.overrunMs > 0 ? `+${fmtMS(r.overrunMs)}` : `-${fmtMS(-r.overrunMs)}`) : '—'}</td>
                   <td>${r.score == null ? '—' : `${fmtScore(r.score)}${r.maxScore != null ? `<i>/${fmtScore(r.maxScore)}</i>` : ''}${r.rate != null ? `<small>${pct(r.rate)}</small>` : ''}`}</td>
                   <td><span class="tag ${r.tag.tone}">${r.tag.text}</span></td>
@@ -564,8 +570,9 @@ views.result = () => {
     </section>
 
     <div class="btn-row">
-      <button class="btn ghost" data-act="copy-report" data-id="${s.id}">复制分析文本</button>
-      <button class="btn ghost" data-act="go" data-view="home">回到首页</button>
+      <button class="btn ghost" data-act="copy-report" data-id="${s.id}">复制文本</button>
+      <button class="btn ghost" data-act="share-image" data-id="${s.id}">生成长图</button>
+      <button class="btn ghost" data-act="go" data-view="home">回首页</button>
     </div>
     ${navHTML('history')}
   </main>`;
@@ -747,9 +754,15 @@ views.tplEdit = () => {
                     ? `<ul class="sub-list">${m.children
                         .map(
                           (c, ci) => `<li>
-                            <input class="sub-name-in" data-i="${i}" data-ci="${ci}" type="text" placeholder="子模块名" value="${esc(c.name)}">
-                            <input class="sub-sug-in" data-i="${i}" data-ci="${ci}" type="number" inputmode="decimal" min="0" step="1" placeholder="建议(分)" value="${c.suggestedMinutes == null ? '' : c.suggestedMinutes}">
-                            <button class="mini danger" data-act="sub-remove" data-i="${i}" data-ci="${ci}" aria-label="删除子模块">×</button>
+                            <div class="sub-line">
+                              <input class="sub-name-in" data-i="${i}" data-ci="${ci}" type="text" placeholder="子模块名，如 图形推理" value="${esc(c.name)}">
+                              <button class="mini danger" data-act="sub-remove" data-i="${i}" data-ci="${ci}" aria-label="删除子模块">×</button>
+                            </div>
+                            <label class="sub-sug-line">
+                              <span>建议用时</span>
+                              <input class="sub-sug-in" data-i="${i}" data-ci="${ci}" type="number" inputmode="decimal" min="0" step="1" placeholder="选填" value="${c.suggestedMinutes == null ? '' : c.suggestedMinutes}">
+                              <span>分钟</span>
+                            </label>
                           </li>`,
                         )
                         .join('')}</ul>`
@@ -888,6 +901,118 @@ function syncExamTplDraft() {
   return e;
 }
 
+/* ------------------------------------------------------------- 趋势 */
+
+function lineChart(values, labels, mode) {
+  const W = 340;
+  const H = 186;
+  const padL = 44;
+  const padR = 14;
+  const padT = 22;
+  const padB = 26;
+  const n = values.length;
+  const max = Math.max(...values);
+  const min = Math.min(...values);
+  const span = max - min;
+  const lo = span === 0 ? Math.max(0, min - Math.max(1, min * 0.1)) : Math.max(0, min - span * 0.25);
+  const hi = span === 0 ? max + Math.max(1, max * 0.1) : max + span * 0.12;
+  const iw = W - padL - padR;
+  const ih = H - padT - padB;
+  const X = (i) => padL + (n === 1 ? iw / 2 : (i * iw) / (n - 1));
+  const Y = (v) => padT + (1 - (v - lo) / (hi - lo || 1)) * ih;
+  const pts = values.map((v, i) => [X(i), Y(v)]);
+  const poly = pts.map((p) => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
+  const last = pts[n - 1];
+  const fmtV = (v) => (mode === 'score' ? fmtScore(v) : `${Math.round(v)}分`);
+  const fmtAxis = (v) => (mode === 'score' ? String(Math.round(v)) : `${Math.round(v)}分`);
+  const showAll = n <= 6;
+
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="趋势图">
+    <line class="chart-grid" x1="${padL}" y1="${Y(hi).toFixed(1)}" x2="${W - padR}" y2="${Y(hi).toFixed(1)}"/>
+    <line class="chart-grid" x1="${padL}" y1="${Y(lo).toFixed(1)}" x2="${W - padR}" y2="${Y(lo).toFixed(1)}"/>
+    <text class="chart-label" x="${padL - 8}" y="${(Y(hi) + 4).toFixed(1)}" text-anchor="end">${fmtAxis(hi)}</text>
+    <text class="chart-label" x="${padL - 8}" y="${(Y(lo) + 4).toFixed(1)}" text-anchor="end">${fmtAxis(lo)}</text>
+    <polygon class="chart-area" points="${padL},${H - padB} ${poly} ${X(n - 1).toFixed(1)},${H - padB}"/>
+    <polyline class="chart-line" points="${poly}"/>
+    ${pts
+      .map((p, i) => `<circle class="chart-dot${i === n - 1 ? ' last' : ''}" cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="${i === n - 1 ? 5 : 3.5}"/>`)
+      .join('')}
+    ${
+      showAll
+        ? pts
+            .map((p, i) => `<text class="chart-val" x="${p[0].toFixed(1)}" y="${(p[1] - 10).toFixed(1)}" text-anchor="middle">${fmtV(values[i])}</text>`)
+            .join('')
+        : `<text class="chart-val" x="${last[0].toFixed(1)}" y="${(last[1] - 10).toFixed(1)}" text-anchor="end">${fmtV(values[n - 1])}</text>`
+    }
+    <text class="chart-label" x="${padL}" y="${H - 6}">${labels[0] || ''}</text>
+    ${n > 1 ? `<text class="chart-label" x="${W - padR}" y="${H - 6}" text-anchor="end">${labels[n - 1]}</text>` : ''}
+  </svg>`;
+}
+
+views.trend = () => {
+  const data = store.db();
+  const all = data.sessions
+    .filter((s) => s.status === 'finished')
+    .sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0));
+  const mode = ui.trendMode || 'score';
+  const points = all
+    .map((s) => ({ s, a: analyze(s) }))
+    .filter((x) => (mode === 'score' ? x.a.effectiveTotal != null : x.a.totalModuleMs > 0))
+    .slice(-12);
+  const values = points.map((x) => (mode === 'score' ? x.a.effectiveTotal : x.a.totalModuleMs / 60000));
+  const labels = points.map((x) => {
+    const d = new Date(x.s.startedAt);
+    return `${d.getMonth() + 1}/${d.getDate()}`;
+  });
+  const avg = values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
+  const best = values.length ? Math.max(...values) : null;
+
+  const body = points.length
+    ? `<section class="card">
+         ${lineChart(values, labels, mode)}
+       </section>
+       <section class="card tight">
+         <div class="stats">
+           <div class="stat"><b>${points.length}</b><span>场次</span></div>
+           <div class="stat"><b>${avg == null ? '—' : (mode === 'score' ? fmtScore(Math.round(avg * 10) / 10) : `${Math.round(avg)} 分`)}</b><span>平均</span></div>
+           <div class="stat"><b>${best == null ? '—' : (mode === 'score' ? fmtScore(best) : `${Math.round(best)} 分`)}</b><span>最好</span></div>
+           <div class="stat"><b>${fmtScore(values[values.length - 1])}${mode === 'time' ? ' 分' : ''}</b><span>最近</span></div>
+         </div>
+       </section>
+       <ul class="hist-list">
+         ${points
+           .slice()
+           .reverse()
+           .slice(0, 8)
+           .map(
+             (x) => `<li>
+               <button class="hist-item" data-act="open-session" data-id="${x.s.id}">
+                 <span class="hist-main">
+                   <b>${esc(x.s.name || '模拟考试')}</b>
+                   <small>${fmtDateTime(x.s.startedAt)}</small>
+                 </span>
+                 <span class="hist-side">
+                   <b>${mode === 'score' ? fmtScore(x.a.effectiveTotal) : `${Math.round(x.a.totalModuleMs / 60000)} 分`}</b>
+                   <small>${mode === 'score' ? (x.a.totalScoreMax ? `满分 ${fmtScore(x.a.totalScoreMax)}` : '得分') : '总用时'}</small>
+                 </span>
+               </button>
+             </li>`,
+           )
+           .join('')}
+       </ul>`
+    : `<p class="empty">${mode === 'score' ? '还没有录过分数的考试。' : '还没有完成的考试。'}</p>`;
+
+  return `<main class="page sub">
+    ${pageHead('趋势')}
+    <div class="seg">
+      <button class="seg-btn${mode === 'score' ? ' on' : ''}" data-act="trend-mode" data-mode="score">成绩</button>
+      <button class="seg-btn${mode === 'time' ? ' on' : ''}" data-act="trend-mode" data-mode="time">用时</button>
+    </div>
+    <p class="hint">最多显示最近 12 场。成绩趋势只统计录过分数的考试。</p>
+    ${body}
+  </main>`;
+};
+
 /* ------------------------------------------------------------- 记录 */
 
 views.history = () => {
@@ -896,7 +1021,7 @@ views.history = () => {
     .filter((s) => s.status === 'finished')
     .sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
   return `<main class="page sub">
-    ${pageHead('考试记录')}
+    ${pageHead('考试记录', { right: '<button class="text-btn" data-act="go" data-view="trend">趋势</button>' })}
     ${list.length === 0
       ? '<p class="empty">还没有完成过模拟考试。开始一场试试？</p>'
       : `<ul class="hist-list">
@@ -1011,6 +1136,7 @@ function tick() {
       const parentUsed = cur.module.children.reduce((a, c) => a + (c.elapsedMs || 0), 0) + stepMs;
       if (parentLeft) setText('#modParent', `本模块合计 ${fmtMS(parentUsed)} / 建议 ${fmtMS(parentLeft)}`);
     }
+    warnOnTarget(cur, stepMs, target);
   }
 
   if (remain <= 0 && !ui.ending) {
@@ -1088,6 +1214,24 @@ function beep(count = 1, freq = 880) {
 
 function buzz() {
   if (navigator.vibrate) navigator.vibrate([180, 80, 180]);
+}
+
+/** 建议用时提醒：剩 5 分钟提醒一次，超时再提醒一次（每段只响一次） */
+function warnOnTarget(cur, stepMs, target) {
+  if (!target) return;
+  if (store.db().settings.suggestWarn === false) return;
+  const key = `${cur.moduleIndex}:${cur.childIndex}`;
+  const state = ui.warned[key];
+  const over = stepMs >= target;
+  const near = !over && stepMs >= target - 5 * 60000;
+  if (over && state !== 'over') {
+    ui.warned[key] = 'over';
+    beep(2, 620);
+    if (navigator.vibrate) navigator.vibrate([120, 60, 120]);
+  } else if (near && !state) {
+    ui.warned[key] = 'near';
+    beep(1, 520);
+  }
 }
 
 /* ----------------------------------------------------------- 考试流程 */
@@ -1182,6 +1326,7 @@ function startExam() {
   store.save();
   ui.draft = null;
   ui.ending = false;
+  ui.warned = {};
   ensureAudio();
   ui.view = 'exam';
   ui.params = { id: session.id };
@@ -1212,6 +1357,7 @@ function undoStepAction() {
   if (!s || s.status !== 'running') return;
   const target = undoLastStep(s, Date.now());
   if (!target) return;
+  ui.warned = {};
   store.save();
   renderModules();
   toast(`已撤销「${target.step.name}」，重新计时`);
@@ -1454,6 +1600,8 @@ function onAct(act, el) {
         ui.etpl = null;
         ui.view = 'templates';
         ui.tplKind = 'exams';
+      } else if (ui.view === 'trend') {
+        ui.view = 'history';
       } else {
         ui.view = 'home';
       }
@@ -1520,6 +1668,13 @@ function onAct(act, el) {
       break;
     case 'copy-report':
       copyReport(el.dataset.id);
+      break;
+    case 'share-image':
+      shareImage(el.dataset.id);
+      break;
+    case 'trend-mode':
+      ui.trendMode = el.dataset.mode || 'score';
+      render();
       break;
     case 'tpl-seg':
       ui.tplKind = el.dataset.kind;
@@ -1660,6 +1815,249 @@ function sessionMenu(id) {
   } else if (choice === '2') {
     copyReport(id);
   }
+}
+
+function wrapText(ctx, text, maxWidth) {
+  const lines = [];
+  let line = '';
+  String(text)
+    .split('')
+    .forEach((ch) => {
+      const test = line + ch;
+      if (ctx.measureText(test).width > maxWidth && line) {
+        lines.push(line);
+        line = ch;
+      } else {
+        line = test;
+      }
+    });
+  if (line) lines.push(line);
+  return lines;
+}
+
+/** 把分析画成一张 750px 宽的长图，优先走系统分享，其次下载 */
+function shareImage(id) {
+  const s = sessionOf(id);
+  if (!s) return;
+  const a = analyze(s);
+
+  let canvas = null;
+  let ctx = null;
+  try {
+    canvas = document.createElement('canvas');
+    ctx = canvas && canvas.getContext ? canvas.getContext('2d') : null;
+  } catch (err) {
+    ctx = null;
+  }
+  if (!ctx) {
+    toast('当前环境不支持生成长图');
+    return;
+  }
+  if (typeof canvas.toBlob !== 'function') {
+    toast('当前环境不支持生成长图');
+    return;
+  }
+
+  const W = 750;
+  const pad = 46;
+  const font = (size, weight = '400') => `${weight} ${size}px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif`;
+  const C = {
+    text: '#E8EEF5',
+    muted: '#8A98A8',
+    dim: '#5E6B7A',
+    green: '#3DDC97',
+    line: '#232E39',
+  };
+
+  ctx.font = font(22);
+  const insightLines = a.insights.slice(0, 4).map((t) => wrapText(ctx, t, W - pad * 2 - 30));
+  const rowH = 66;
+  const insightH = insightLines.reduce((n, l) => n + l.length * 34 + 16, 0);
+  const H = 300 + 54 + a.rows.length * rowH + 76 + insightH + 92;
+
+  canvas.width = W;
+  canvas.height = H;
+
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#101821');
+  g.addColorStop(1, '#0B0F14');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.fillStyle = C.green;
+  ctx.fillRect(0, 0, W, 6);
+
+  const dateStr = s.startedAt ? fmtDateTime(s.startedAt) : '';
+  ctx.textBaseline = 'alphabetic';
+
+  ctx.fillStyle = C.text;
+  ctx.font = font(36, '700');
+  ctx.fillText(String(s.name || '模拟考试').slice(0, 18), pad, 88);
+
+  ctx.fillStyle = C.muted;
+  ctx.font = font(20);
+  ctx.fillText(`${dateStr} · 考场 ${msToHM(s.plan.startVirtual)}–${msToHM(s.plan.endVirtual)} · ${s.templateName || ''}`, pad, 124);
+
+  // 总分
+  const scoreText = a.effectiveTotal != null ? fmtScore(a.effectiveTotal) : '—';
+  ctx.fillStyle = C.green;
+  ctx.font = font(78, '700');
+  ctx.fillText(scoreText, pad, 226);
+  const scoreW = ctx.measureText(scoreText).width;
+  if (a.totalScoreMax != null) {
+    ctx.fillStyle = C.muted;
+    ctx.font = font(30);
+    ctx.fillText(`/ ${fmtScore(a.totalScoreMax)}`, pad + scoreW + 10, 226);
+  }
+  if (a.scoreRate != null) {
+    ctx.textAlign = 'right';
+    ctx.fillStyle = C.text;
+    ctx.font = font(34, '600');
+    ctx.fillText(`得分率 ${pct(a.scoreRate, 1)}`, W - pad, 210);
+    ctx.fillStyle = C.muted;
+    ctx.font = font(20);
+    ctx.fillText(a.manualTotal != null ? '手填总分' : '各模块合计', W - pad, 240);
+    ctx.textAlign = 'left';
+  }
+
+  // 三项统计
+  const stats = [
+    ['实际用时', fmtHMS(a.totalModuleMs)],
+    ['考试耗时', fmtHMS(a.wallMs)],
+    [a.remainMs >= 60000 ? '提前交卷' : a.remainMs <= -60000 ? '超时' : '压线交卷', fmtHMS(Math.abs(a.remainMs))],
+  ];
+  stats.forEach(([label, value], i) => {
+    const x = pad + i * ((W - pad * 2) / 3);
+    ctx.fillStyle = C.text;
+    ctx.font = font(26, '600');
+    ctx.fillText(value, x, 286);
+    ctx.fillStyle = C.muted;
+    ctx.font = font(18);
+    ctx.fillText(label, x, 312);
+  });
+
+  let y = 360;
+  ctx.fillStyle = C.line;
+  ctx.fillRect(pad, y - 24, W - pad * 2, 1);
+  ctx.fillStyle = C.muted;
+  ctx.font = font(20);
+  ctx.fillText('各模块', pad, y);
+  y += 26;
+  ctx.font = font(20);
+
+  a.rows.forEach((r) => {
+    ctx.fillStyle = r.color;
+    ctx.beginPath();
+    ctx.arc(pad + 6, y + 16, 6, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = C.text;
+    ctx.font = font(24, '600');
+    ctx.fillText(String(r.name).slice(0, 14), pad + 22, y + 24);
+
+    ctx.textAlign = 'right';
+    ctx.fillStyle = C.muted;
+    ctx.font = font(20);
+    ctx.fillText(`${fmtMS(r.ms)} · ${pct(r.timeShare)}`, W - pad, y + 24);
+    ctx.textAlign = 'left';
+
+    const barW = W - pad * 2 - 22;
+    ctx.fillStyle = 'rgba(255,255,255,0.07)';
+    roundRect(ctx, pad + 22, y + 34, barW, 7, 4);
+    ctx.fillStyle = r.color;
+    roundRect(ctx, pad + 22, y + 34, Math.max(3, barW * r.timeShare), 7, 4);
+
+    const bits = [];
+    if (r.score != null) {
+      bits.push(`得分 ${fmtScore(r.score)}${r.maxScore != null ? `/${fmtScore(r.maxScore)}` : ''}${r.rate != null ? `（${pct(r.rate)}）` : ''}`);
+    }
+    if (r.avgPerQuestionMs != null) bits.push(`${fmtPerQuestion(r.avgPerQuestionMs)}/题`);
+    if (r.suggestedMs != null) bits.push(r.overrunMs > 0 ? `超建议 ${fmtMS(r.overrunMs)}` : `省 ${fmtMS(-r.overrunMs)}`);
+    ctx.fillStyle = C.muted;
+    ctx.font = font(17);
+    ctx.fillText(bits.join(' · '), pad + 22, y + 60);
+
+    y += rowH;
+  });
+
+  y += 18;
+  ctx.fillStyle = C.line;
+  ctx.fillRect(pad, y, W - pad * 2, 1);
+  y += 34;
+  ctx.fillStyle = C.muted;
+  ctx.font = font(20);
+  ctx.fillText('分析', pad, y);
+  y += 30;
+
+  insightLines.forEach((lines, i) => {
+    ctx.fillStyle = C.green;
+    ctx.font = font(18, '700');
+    ctx.fillText(`${i + 1}`, pad, y + 4);
+    ctx.fillStyle = C.text;
+    ctx.font = font(21);
+    lines.forEach((line, li) => {
+      ctx.fillText(line, pad + 28, y + li * 34);
+    });
+    y += lines.length * 34 + 16;
+  });
+
+  ctx.fillStyle = C.dim;
+  ctx.font = font(17);
+  ctx.textAlign = 'left';
+  ctx.fillText('模拟考场 · 虚拟考场时钟', pad, H - 34);
+  ctx.textAlign = 'right';
+  ctx.fillText(new Date().toLocaleDateString('zh-CN'), W - pad, H - 34);
+  ctx.textAlign = 'left';
+
+  canvas.toBlob((blob) => {
+    if (!blob) {
+      toast('生成失败，请重试');
+      return;
+    }
+    const name = `模拟考场-${fmtDateTime(s.startedAt).replace(/[/: ]/g, '-')}.png`;
+    const file = typeof File === 'function' ? new File([blob], name, { type: 'image/png' }) : null;
+    const share = async () => {
+      try {
+        if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
+          await navigator.share({ files: [file], title: s.name || '模拟考场' });
+          return true;
+        }
+      } catch (err) {
+        // 用户主动取消就不再下载；其它错误（不支持、非手势触发）退回下载
+        if (err && err.name === 'AbortError') return true;
+        return false;
+      }
+      return false;
+    };
+    share().then((done) => {
+      if (done) return;
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = name;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      toast('长图已生成，去相册或下载里看看');
+    });
+  }, 'image/png');
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  const radius = Math.min(r, h / 2, w / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.lineTo(x + w - radius, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
+  ctx.lineTo(x + w, y + h - radius);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
+  ctx.lineTo(x + radius, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
+  ctx.lineTo(x, y + radius);
+  ctx.quadraticCurveTo(x, y, x + radius, y);
+  ctx.closePath();
+  ctx.fill();
 }
 
 function copyReport(id) {

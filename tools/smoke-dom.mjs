@@ -2,7 +2,7 @@
  * 极简 DOM 桩 + 端到端流程冒烟测试（v2）
  * 在 Node 里真实加载 web/js/app.js，模拟点击走完：
  * 新建模版（含二级模块/题目数/建议用时）→ 新建考试模版 → 用模版开考（子模块计时）
- * → 撤销 → 交卷 → 按正确题数录分 → 手填总分 → 记录页 → 旧数据升级。
+ * → 撤销 → 交卷 → 按正确题数录分 → 手填总分 → 趋势页 → 旧数据升级。
  *
  *   node tools/smoke-dom.mjs
  */
@@ -276,6 +276,26 @@ ok('记录页 → 分析页', () => {
   assert.ok(html().includes('得分录入'));
 });
 
+ok('趋势页：成绩 / 用时可切换', () => {
+  click('go', { view: 'trend' });
+  assert.ok(html().includes('趋势'));
+  assert.ok(html().includes('成绩'));
+  assert.ok(html().includes('chart'), '有分数时应画出折线图');
+  click('trend-mode', { mode: 'time' });
+  assert.ok(html().includes('用时'));
+  // 这场考试是点击瞬间完成的，总用时为 0，所以用时趋势会显示空状态
+  assert.ok(html().includes('chart') || html().includes('还没有完成的考试'));
+  click('back');
+  assert.ok(html().includes('考试记录'));
+});
+
+ok('长图按钮在不支持 canvas 的环境下降级', () => {
+  const s = lastSession();
+  click('open-session', { id: s.id });
+  click('share-image', { id: s.id });
+  assert.ok(html().length > 0);
+});
+
 console.log('旧数据升级');
 
 ok('v1 数据自动升级到 v2', () => {
@@ -304,6 +324,7 @@ ok('v1 数据自动升级到 v2', () => {
   assert.deepEqual(d.examTemplates, []);
   assert.equal(d.sessions[0].modules[0].score, 20);
   assert.equal(d.sessions[0].modules[0].children.length, 0);
+  assert.equal(d.settings.suggestWarn, true, '新增设置项有默认值');
 });
 
 console.log(`\n通过 ${passed} 项`);

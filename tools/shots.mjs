@@ -245,6 +245,30 @@ const demo = {
   ],
 };
 
+/* 追加几场历史考试，让趋势图有数据 */
+const variants = [
+  [12, 24, 15, 18, 5],
+  [14, 27, 17, 21, 6],
+  [15, 28, 19, 23, 7],
+];
+variants.forEach((cs, k) => {
+  const base = demo.sessions[0];
+  const mods = JSON.parse(JSON.stringify(base.modules));
+  mods.forEach((m, i) => {
+    m.correctCount = cs[i];
+    m.score = m.questionCount ? cs[i] * (m.perQuestionScore ?? 1) : null;
+  });
+  const started = ts(2026, 9, 28 + k * 7, 9, 0);
+  demo.sessions.push({
+    ...base,
+    id: `ses_h${k}`,
+    name: `国考行测 第 ${k + 1} 套`,
+    startedAt: started,
+    finishedAt: started + (base.finishedAt - base.startedAt),
+    modules: mods,
+  });
+});
+
 console.log('· 空状态流程');
 await load();
 await shot('01-home');
@@ -290,6 +314,9 @@ await shot('10-templates-modules');
 
 await click('[data-act="tpl-edit"]');
 await shot('11-template-editor');
+await evaluate('window.scrollTo(0, 900)');
+await shot('20-template-submodule');
+await evaluate('window.scrollTo(0, 0)');
 
 await click('[data-act="back"]');
 await click('[data-act="tpl-seg"][data-kind="exams"]');
@@ -297,6 +324,11 @@ await shot('12-templates-exams');
 
 await click('[data-act="tpl-new-exam"]');
 await shot('13-exam-template-editor');
+
+await click('[data-act="back"]');
+await click('[data-act="go"][data-view="history"]');
+await click('[data-act="go"][data-view="trend"]');
+await shot('19-trend');
 
 /* -------------------------------------------------- 深色 + 表盘 */
 
@@ -364,6 +396,32 @@ await load();
 await click('[data-act="resume"]');
 await sleep(1000);
 await shot('18-exam-landscape');
+
+/* -------------------------------------------------- 长图（走下载路径） */
+
+await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+const DL = path.resolve('docs/shots/_dl');
+await fs.mkdir(DL, { recursive: true });
+try {
+  await send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: DL });
+} catch (err) {
+  console.log('  (下载行为设置失败)', err.message);
+}
+await evaluate(`localStorage.setItem('mock-exam:v1', ${JSON.stringify(JSON.stringify(demo))})`);
+await load();
+await click('[data-act="open-session"]');
+// 桌面/无头环境没有分享面板，强制走「下载」分支
+await evaluate(`Object.defineProperty(navigator, 'canShare', { value: () => false, configurable: true })`);
+await click('[data-act="share-image"]');
+await sleep(3000);
+const files = (await fs.readdir(DL)).filter((f) => f.endsWith('.png'));
+if (files.length) {
+  const src = path.join(DL, files[0]);
+  await fs.copyFile(src, path.join(OUT, '21-long-image.png'));
+  console.log('  shot 21-long-image (来自下载)');
+} else {
+  console.log('  ! 没有捕获到长图下载');
+}
 
 console.log('done →', OUT);
 ws.close();

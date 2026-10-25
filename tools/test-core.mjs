@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import {
   parseHM, msToHM, msToHMS, fmtHMS, fmtMS, fmtHuman, fmtMinutes, durationFor,
   virtualNow, remainingMs, currentIndex, analyze, reportText, pct, fmtScore, defaultModules,
+  fmtPerQuestion,
   allSteps, currentStep, completeCurrentStep, undoLastStep, closeCurrentStep,
   isModuleDone, moduleScore, moduleMaxScore, moduleSuggestedMs, stepSuggestedMs,
 } from '../web/js/core.js';
@@ -265,6 +266,20 @@ test('分析里给出超时建议', () => {
   const a = analyze(s);
   assert.equal(a.rows[1].overrunMs, 15 * MIN);
   assert.ok(a.insights.some((t) => t.includes('多花了') && t.includes('资料分析')));
+});
+
+test('每题平均耗时与速度对比', () => {
+  const s = makeSession();
+  s.modules[1].questionCount = 20; // 75 分钟 / 20 题 = 3 分 45 秒
+  s.modules[2].questionCount = 15; // 15 分钟 / 15 题 = 1 分钟
+  const a = analyze(s);
+  assert.equal(a.rows[1].questionCount, 20);
+  assert.equal(a.rows[1].avgPerQuestionMs, (75 * MIN) / 20);
+  assert.equal(a.rows[0].avgPerQuestionMs, null, '没有题目数时为 null');
+  assert.equal(fmtPerQuestion(102000), '1 分 42 秒');
+  assert.equal(fmtPerQuestion(32000), '32 秒');
+  assert.equal(fmtPerQuestion(60000), '1 分');
+  assert.ok(a.insights.some((t) => t.includes('平均每题') && t.includes('资料分析')));
 });
 
 console.log('分析（旧字段兼容）');

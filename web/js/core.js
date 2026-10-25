@@ -268,6 +268,16 @@ export function perQuestionScore(m) {
   return m && m.perQuestionScore != null ? m.perQuestionScore : 1;
 }
 
+/** 每题平均耗时 -> "1 分 42 秒" */
+export function fmtPerQuestion(ms) {
+  if (ms == null || !Number.isFinite(ms)) return '—';
+  const total = Math.round(ms / 1000);
+  if (total < 60) return `${total} 秒`;
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return s ? `${m} 分 ${s} 秒` : `${m} 分`;
+}
+
 /** 模块满分：显式满分优先，否则 题目数 × 每题分 */
 export function moduleMaxScore(m) {
   if (!m) return null;
@@ -316,6 +326,7 @@ export function defaultData() {
       clockMode: 'digital',
       sound: true,
       keepAwake: true,
+      suggestWarn: true,
       lastSetup: {
         startVirtual: parseHM('09:00'),
         endVirtual: parseHM('11:00'),
@@ -409,6 +420,7 @@ export function analyze(session) {
       allScored && derivedTotal > 0 && score != null ? score / derivedTotal : null;
     const suggestedMs = moduleSuggestedMs(m);
     const overrunMs = suggestedMs != null ? ms - suggestedMs : null;
+    const avgPerQuestionMs = m.questionCount ? ms / m.questionCount : null;
 
     let tag;
     if (ms <= 0) tag = { text: '未开始', tone: 'muted' };
@@ -444,6 +456,7 @@ export function analyze(session) {
       color: MODULE_COLORS[i % MODULE_COLORS.length],
       suggestedMs,
       overrunMs,
+      avgPerQuestionMs,
       questionCount: m.questionCount == null ? null : m.questionCount,
       correctCount: m.correctCount == null ? null : m.correctCount,
       perQuestionScore: perQuestionScore(m),
@@ -471,6 +484,15 @@ export function analyze(session) {
     );
   } else if (rows.some((r) => r.overrunMs != null)) {
     insights.push('所有模块都没有超过建议用时，节奏控制得不错。');
+  }
+
+  const speeds = rows.filter((r) => r.avgPerQuestionMs != null && r.avgPerQuestionMs > 0);
+  if (speeds.length >= 2) {
+    const slow = speeds.slice().sort((a, b) => b.avgPerQuestionMs - a.avgPerQuestionMs)[0];
+    const fast = speeds.slice().sort((a, b) => a.avgPerQuestionMs - b.avgPerQuestionMs)[0];
+    insights.push(
+      `平均每题：最慢「${slow.name}」${fmtPerQuestion(slow.avgPerQuestionMs)}/题，最快「${fast.name}」${fmtPerQuestion(fast.avgPerQuestionMs)}/题。`,
+    );
   }
 
   if (hasScores) {
@@ -576,6 +598,7 @@ export function reportText(session) {
   lines.push('各模块：');
   a.rows.forEach((r, i) => {
     const parts = [`${i + 1}. ${r.name}  ${fmtMS(r.ms)}（${pct(r.timeShare)}）`];
+    if (r.avgPerQuestionMs != null) parts.push(`${fmtPerQuestion(r.avgPerQuestionMs)}/题`);
     if (r.suggestedMs != null) {
       const d = r.ms - r.suggestedMs;
       parts.push(`建议 ${fmtMS(r.suggestedMs)}${d > 0 ? `，超 ${fmtMS(d)}` : `，省 ${fmtMS(-d)}`}`);
