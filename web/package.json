@@ -1,0 +1,6 @@
+{
+  "name": "mock-exam-clock-web",
+  "private": true,
+  "type": "module",
+  "description": "模拟考场 Web/PWA 端（无构建、零依赖）"
+}

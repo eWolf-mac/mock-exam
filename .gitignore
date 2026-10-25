@@ -1,0 +1,13 @@
+# 依赖 / 构建产物
+node_modules/
+dist/
+
+# 本地临时文件
+*.log
+*.zip
+.DS_Store
+Thumbs.db
+.preview/
+
+# 截图脚本产生的临时目录
+docs/shots/*.tmp

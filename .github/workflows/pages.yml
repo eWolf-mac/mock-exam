@@ -1,0 +1,45 @@
+name: Deploy PWA to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+        with:
+          # 仓库还没在 Settings 里开 Pages 时自动开启（需要 pages: write 权限）
+          enablement: true
+
+      # 只发布 web/ 目录：ios/、docs/、tools/ 不会出现在网站上
+      - name: Upload web as Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
