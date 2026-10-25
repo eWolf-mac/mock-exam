@@ -2,9 +2,11 @@
  * app.js —— 界面与交互（原生视图切换，无框架）
  */
 import {
-  fmtHMS, fmtMS, fmtHuman, msToHM, msToHMS, fmtScore, pct, esc, uid, clamp, cnNum,
-  parseHM, durationFor, numOrNull, virtualNow, remainingMs, elapsedWall, currentIndex,
-  analyze, reportText, defaultModules, MODULE_COLORS,
+  fmtHMS, fmtMS, fmtHuman, fmtMinutes, msToHM, msToHMS, fmtScore, pct, esc, uid, clamp, cnNum,
+  parseHM, durationFor, numOrNull, virtualNow, remainingMs, elapsedWall, analyze, reportText,
+  defaultModules, MODULE_COLORS, allSteps, currentStep, completeCurrentStep, undoLastStep,
+  closeCurrentStep, isModuleDone, hasChildren, moduleScore, moduleMaxScore, moduleSuggestedMs,
+  stepSuggestedMs, perQuestionScore,
 } from './core.js';
 import * as store from './store.js';
 
@@ -18,6 +20,8 @@ const ui = {
   params: {},
   draft: null,
   tpl: null,
+  etpl: null,
+  tplKind: 'modules',
   flash: null,
   timer: null,
   ending: false,
@@ -67,18 +71,30 @@ function pageHead(title, { back = true, right = '' } = {}) {
   </header>`;
 }
 
+function sumModuleMs(s) {
+  return (s.modules || []).reduce((a, m) => a + (m.elapsedMs || 0), 0);
+}
+
+function fmtDateTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 /* ------------------------------------------------------------- 首页 */
 
 views.home = () => {
   const data = store.db();
   const running = store.runningSession();
   const setup = data.settings.lastSetup;
-  const tpl = data.settings.lastSetup.templateId ? store.findTemplate(setup.templateId) : null;
+  const tpl = setup.templateId ? store.findTemplate(setup.templateId) : null;
   const finished = data.sessions
     .filter((s) => s.status === 'finished')
     .sort((a, b) => (b.finishedAt || 0) - (a.finishedAt || 0));
   const last = finished[0];
   const duration = durationFor(setup.startVirtual, setup.endVirtual);
+  const lastAnalysis = last ? analyze(last) : null;
 
   const resumeCard = running
     ? `<button class="resume-card" data-act="resume" data-id="${running.id}">
@@ -99,7 +115,11 @@ views.home = () => {
              <b>${esc(last.name || '模拟考试')}</b>
              <small>${fmtDateTime(last.startedAt)} · ${esc(last.templateName || '')}</small>
            </span>
-           <span class="last-score">${last.totalScore != null ? fmtScore(last.totalScore) + (last.plan.totalScore ? `<i>/${fmtScore(last.plan.totalScore)}</i>` : '') : fmtMS(sumModuleMs(last))}</span>
+           <span class="last-score">${
+             lastAnalysis && lastAnalysis.effectiveTotal != null
+               ? `${fmtScore(lastAnalysis.effectiveTotal)}${last.plan.totalScore ? `<i>/${fmtScore(last.plan.totalScore)}</i>` : ''}`
+               : fmtMS(sumModuleMs(last))
+           }</span>
          </button>
        </section>`
     : '';
@@ -120,10 +140,13 @@ views.home = () => {
       <button class="tile" data-act="go" data-view="templates">
         <b>${data.templates.length}</b><span>模块模版</span>
       </button>
-      <button class="tile" data-act="go" data-view="history">
-        <b>${finished.length}</b><span>考试记录</span>
+      <button class="tile" data-act="go" data-view="templates">
+        <b>${data.examTemplates.length}</b><span>考试模版</span>
       </button>
     </div>
+    <button class="tile wide" data-act="go" data-view="history">
+      <span>考试记录</span><b>${finished.length}</b>
+    </button>
     ${lastCard}
     <section class="card tight more">
       <div class="card-head"><h2>偏好设置</h2></div>
@@ -145,17 +168,6 @@ views.home = () => {
   </main>`;
 };
 
-function sumModuleMs(s) {
-  return (s.modules || []).reduce((a, m) => a + (m.elapsedMs || 0), 0);
-}
-
-function fmtDateTime(ts) {
-  if (!ts) return '';
-  const d = new Date(ts);
-  const p = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
-}
-
 /* --------------------------------------------------------- 新建考试 */
 
 function newExamDraft() {
@@ -169,16 +181,33 @@ function newExamDraft() {
     templateId: s.templateId || null,
     moduleCount: clamp(Number(s.moduleCount) || 4, 2, 8),
     totalScore: s.totalScore == null ? '' : String(s.totalScore),
+    examTemplateId: null,
   };
   return ui.draft;
+}
+
+function durLabelHTML(startStr, endStr) {
+  const s = parseHM(startStr);
+  const e = parseHM(endStr);
+  if (s == null || e == null) return '请填写有效的开始 / 结束时间';
+  const d = durationFor(s, e);
+  const cross = e <= s;
+  return `共 ${fmtHuman(d)}${cross ? '（跨零点）' : ''}`;
 }
 
 views.newExam = () => {
   const d = newExamDraft();
   const data = store.db();
-  const tpl = d.templateId ? store.findTemplate(d.templateId) : null;
+  let tpl = d.templateId ? store.findTemplate(d.templateId) : null;
   if (d.templateId && !tpl) d.templateId = null;
   const duration = durationFor(parseHM(d.start) || 0, parseHM(d.end) || 0);
+
+  const examChips = [
+    `<button class="chip${d.examTemplateId ? '' : ' on'}" data-act="pick-exam-template" data-id="">自定义</button>`,
+    ...data.examTemplates.map(
+      (e) => `<button class="chip${d.examTemplateId === e.id ? ' on' : ''}" data-act="pick-exam-template" data-id="${e.id}">${esc(e.name)}</button>`,
+    ),
+  ].join('');
 
   const choices = [
     { id: '', title: `默认模块 × ${d.moduleCount}`, sub: '按顺序生成「模块一、模块二…」' },
@@ -191,6 +220,17 @@ views.newExam = () => {
 
   return `<main class="page sub">
     ${pageHead('新建模拟考试')}
+
+    ${
+      data.examTemplates.length
+        ? `<section class="card tight">
+            <div class="card-head"><h2>考试模版</h2><button class="text-btn" data-act="tpl-new-exam">+ 新建</button></div>
+            <div class="chips">${examChips}</div>
+            <p class="hint">选一个会自动带上考试时间、模块模版和总分，下面仍可以改。</p>
+          </section>`
+        : ''
+    }
+
     <section class="card">
       <label class="field">
         <span>考试名称<em>选填</em></span>
@@ -244,15 +284,6 @@ views.newExam = () => {
   </main>`;
 };
 
-function durLabelHTML(startStr, endStr) {
-  const s = parseHM(startStr);
-  const e = parseHM(endStr);
-  if (s == null || e == null) return '请填写有效的开始 / 结束时间';
-  const d = durationFor(s, e);
-  const cross = e <= s;
-  return `共 ${fmtHuman(d)}${cross ? '（跨零点）' : ''}`;
-}
-
 function syncExamDraft() {
   const d = newExamDraft();
   const name = $('#f-name');
@@ -264,6 +295,20 @@ function syncExamDraft() {
   if (end && parseHM(end.value) != null) d.end = end.value;
   if (total) d.totalScore = total.value;
   return d;
+}
+
+function applyExamTemplate(id) {
+  const d = syncExamDraft();
+  d.examTemplateId = id || null;
+  if (!id) return;
+  const e = store.findExamTemplate(id);
+  if (!e) return;
+  if (e.startVirtual != null) d.start = msToHM(e.startVirtual);
+  if (e.endVirtual != null) d.end = msToHM(e.endVirtual);
+  d.templateId = e.templateId || null;
+  d.moduleCount = clamp(e.moduleCount || 4, 2, 8);
+  d.totalScore = e.totalScore == null ? '' : String(e.totalScore);
+  if (!d.name.trim()) d.name = '';
 }
 
 /* ------------------------------------------------------------- 考试中 */
@@ -335,44 +380,88 @@ views.exam = () => {
 };
 
 function modulePanelHTML(s) {
-  const idx = currentIndex(s);
-  const total = s.modules.length;
-  const canUndo = s.modules.some((m) => m.endedAt != null);
+  const steps = allSteps(s);
+  const cur = currentStep(s);
+  const doneSteps = steps.filter((x) => x.step.endedAt != null).length;
+  const canUndo = doneSteps > 0;
 
-  const current =
-    idx >= 0
-      ? `<div class="cm">
-           <div class="cm-top">
-             <span class="cm-label">当前模块 ${idx + 1} / ${total}</span>
-             <span class="cm-hint">完成后自动进入下一块</span>
-           </div>
-           <div class="cm-name">${esc(s.modules[idx].name)}</div>
-           <div class="cm-timer" id="modTimer">00:00</div>
-           <button class="btn primary big" data-act="complete">完成本模块 →</button>
-         </div>`
-      : `<div class="cm done-all">
-           <div class="cm-name">全部模块已完成</div>
-           <p class="hint">可以交卷查看分析，也可以撤销上一个模块重新计时。</p>
-           <button class="btn primary big" data-act="submit">交卷并查看分析</button>
-         </div>`;
+  if (!cur) {
+    return `<section class="panel">
+      <div class="cm done-all">
+        <div class="cm-name">全部模块已完成</div>
+        <p class="hint">可以交卷查看分析，也可以撤销上一个模块重新计时。</p>
+        <button class="btn primary big" data-act="submit">交卷并查看分析</button>
+      </div>
+      ${canUndo ? '<button class="text-btn dim undo-btn" data-act="undo">↩ 撤销上一个模块</button>' : ''}
+      ${moduleListHTML(s, cur)}
+    </section>`;
+  }
+
+  const mod = cur.module;
+  const isChild = cur.isChild;
+  const modIdx = cur.moduleIndex;
+  const modTarget = moduleSuggestedMs(mod);
+  const parentInfo = isChild
+    ? `<div class="cm-parent" id="modParent">${esc(mod.name)} · 本模块按子模块累计</div>`
+    : '';
 
   return `<section class="panel">
-    ${current}
-    ${canUndo ? `<button class="text-btn dim undo-btn" data-act="undo">↩ 撤销上一个模块</button>` : ''}
-    <ol class="mods">
-      ${s.modules
-        .map((m, i) => {
-          const state = m.endedAt != null ? 'done' : i === idx ? 'now' : 'todo';
-          const time = m.endedAt != null ? fmtMS(m.elapsedMs) : state === 'now' ? '进行中' : '待开始';
-          return `<li class="mod ${state}">
-            <span class="mod-idx">${m.endedAt != null ? '✓' : i + 1}</span>
-            <span class="mod-name">${esc(m.name)}</span>
-            <span class="mod-time">${time}</span>
-          </li>`;
-        })
-        .join('')}
-    </ol>
+    <div class="cm">
+      <div class="cm-top">
+        <span class="cm-label">${
+          isChild
+            ? `模块 ${modIdx + 1}/${s.modules.length} · 子模块 ${cur.childIndex + 1}/${mod.children.length}`
+            : `当前模块 ${modIdx + 1}/${s.modules.length}`
+        }</span>
+        <span class="cm-hint"></span>
+      </div>
+      ${parentInfo}
+      <div class="cm-name">${esc(cur.step.name)}</div>
+      <div class="cm-timer" id="modTimer">00:00</div>
+      <div class="cm-target" id="modTarget"></div>
+      <button class="btn primary big" data-act="complete">完成${isChild ? '子模块' : '本模块'} →</button>
+    </div>
+    ${canUndo ? '<button class="text-btn dim undo-btn" data-act="undo">↩ 撤销上一个模块</button>' : ''}
+    ${moduleListHTML(s, cur)}
   </section>`;
+}
+
+function moduleListHTML(s, cur) {
+  const rows = s.modules
+    .map((m, i) => {
+      const done = isModuleDone(m);
+      const active = cur && cur.moduleIndex === i;
+      const state = done ? 'done' : active ? 'now' : 'todo';
+      const nested = hasChildren(m);
+      const time = done || (active && m.elapsedMs > 0)
+        ? fmtMS(m.elapsedMs)
+        : active
+          ? '进行中'
+          : '待开始';
+      let html = `<li class="mod ${state}${nested ? ' nested' : ''}">
+        <span class="mod-idx">${done ? '✓' : i + 1}</span>
+        <span class="mod-name">${esc(m.name)}</span>
+        <span class="mod-time">${time}</span>
+      </li>`;
+      if (nested) {
+        html += m.children
+          .map((c, ci) => {
+            const cDone = c.endedAt != null;
+            const cNow = cur && cur.moduleIndex === i && cur.childIndex === ci;
+            const cState = cDone ? 'done' : cNow ? 'now' : 'todo';
+            const cTime = cDone ? fmtMS(c.elapsedMs) : cNow ? '进行中' : '待开始';
+            return `<li class="mod sub ${cState}">
+              <span class="mod-idx">${cDone ? '✓' : `${i + 1}.${ci + 1}`}</span>
+              <span class="mod-name">${esc(c.name)}</span>
+              <span class="mod-time">${cTime}</span>
+            </li>`;
+          })
+          .join('');
+      }
+      return html;
+    })
+    .join('');
+  return `<ol class="mods">${rows}</ol>`;
 }
 
 /* ------------------------------------------------------------- 结果页 */
@@ -382,17 +471,18 @@ views.result = () => {
   if (!s) return `<main class="page sub">${pageHead('考试分析')}<p class="empty">记录不存在或已被删除。</p></main>`;
   const a = analyze(s);
   const hasMax = s.plan.totalScore != null;
-  const finished = s.status === 'finished';
   const onTime = Math.abs(a.remainMs) < 60000;
   const remainLabel = onTime ? '压线交卷' : a.remainMs > 0 ? '提前交卷' : '超时';
   const remainTone = onTime ? '' : a.remainMs > 0 ? 'good' : 'bad';
-
-  const statScore = s.totalScore != null
-    ? `${fmtScore(s.totalScore)}${hasMax ? `<em>/${fmtScore(s.plan.totalScore)}</em>` : ''}`
+  const statScore = a.effectiveTotal != null
+    ? `${fmtScore(a.effectiveTotal)}${hasMax ? `<em>/${fmtScore(s.plan.totalScore)}</em>` : ''}`
     : (hasMax ? `<em>满分 ${fmtScore(s.plan.totalScore)}</em>` : '—');
+  const autoTag = a.manualTotal == null && a.derivedTotal != null
+    ? '<span class="mini-tag">各模块合计</span>'
+    : '';
 
   return `<main class="page sub result">
-    ${pageHead(s.name || '模拟考试', { right: `<button class="text-btn" data-act="open-session-menu" data-id="${s.id}">⋯</button>` })}
+    ${pageHead(s.name || '模拟考试', { right: '<button class="text-btn" data-act="session-menu" data-id="' + s.id + '">⋯</button>' })}
     ${flashHTML()}
     <p class="result-sub">${fmtDateTime(s.startedAt)} · ${esc(s.templateName || '')} · 考场 ${msToHM(s.plan.startVirtual)}–${msToHM(s.plan.endVirtual)}</p>
 
@@ -401,9 +491,9 @@ views.result = () => {
         <div class="stat"><b>${fmtHMS(a.totalModuleMs)}</b><span>实际完成总用时</span></div>
         <div class="stat"><b>${fmtHMS(a.wallMs)}</b><span>考试耗时</span></div>
         <div class="stat"><b class="${remainTone}">${fmtHMS(Math.abs(a.remainMs))}</b><span>${remainLabel}</span></div>
-        <div class="stat"><b class="score">${statScore}</b><span>${a.scoreRate != null ? `得分率 ${pct(a.scoreRate, 1)}` : '总分'}</span></div>
+        <div class="stat"><b class="score">${statScore}</b><span>${a.scoreRate != null ? `得分率 ${pct(a.scoreRate, 1)}` : '总分'} ${autoTag}</span></div>
       </div>
-      ${finished ? '' : '<p class="hint">这场考试还在进行中。</p>'}
+      ${s.status === 'finished' ? '' : '<p class="hint">这场考试还在进行中。</p>'}
     </section>
 
     <section class="card">
@@ -422,6 +512,8 @@ views.result = () => {
                 <span class="bp">${pct(r.timeShare)}</span>
               </div>
               <div class="bar-track"><i style="width:${(r.timeShare * 100).toFixed(2)}%;background:${r.color}"></i></div>
+              ${r.suggestedMs != null ? `<div class="bar-sug"><span>建议 ${fmtMS(r.suggestedMs)}</span><span class="${r.overrunMs > 0 ? 'over' : 'under'}">${r.overrunMs > 0 ? `超 ${fmtMS(r.overrunMs)}` : `省 ${fmtMS(-r.overrunMs)}`}</span></div>` : ''}
+              ${r.children.length ? `<ul class="sub-bars">${r.children.map((c) => `<li><span>${esc(c.name)}</span><b>${fmtMS(c.ms)}</b><i>${pct(c.share)}</i></li>`).join('')}</ul>` : ''}
             </li>`,
           )
           .join('')}
@@ -432,23 +524,34 @@ views.result = () => {
       <div class="card-head"><h2>模块明细</h2></div>
       <div class="table-wrap">
         <table class="tbl">
-          <thead><tr><th>模块</th><th>用时</th><th>占比</th>${a.hasScores ? '<th>得分</th>' : ''}<th>效率</th></tr></thead>
+          <thead><tr><th>模块</th><th>用时</th><th>较建议</th><th>得分</th><th>效率</th></tr></thead>
           <tbody>
             ${a.rows
               .map(
                 (r) => `<tr>
                   <td class="t-name">${esc(r.name)}</td>
                   <td>${fmtMS(r.ms)}</td>
-                  <td>${pct(r.timeShare)}</td>
-                  ${a.hasScores ? `<td>${r.score == null ? '—' : `${fmtScore(r.score)}${r.maxScore != null ? `<i>/${fmtScore(r.maxScore)}</i>` : ''}${r.rate != null ? `<small>${pct(r.rate)}</small>` : ''}`}</td>` : ''}
+                  <td class="${r.overrunMs > 0 ? 'over' : ''}">${r.suggestedMs != null ? (r.overrunMs > 0 ? `+${fmtMS(r.overrunMs)}` : `-${fmtMS(-r.overrunMs)}`) : '—'}</td>
+                  <td>${r.score == null ? '—' : `${fmtScore(r.score)}${r.maxScore != null ? `<i>/${fmtScore(r.maxScore)}</i>` : ''}${r.rate != null ? `<small>${pct(r.rate)}</small>` : ''}`}</td>
                   <td><span class="tag ${r.tag.tone}">${r.tag.text}</span></td>
-                </tr>`,
+                </tr>
+                ${r.children
+                  .map(
+                    (c) => `<tr class="sub">
+                      <td class="t-name sub">↳ ${esc(c.name)}</td>
+                      <td>${fmtMS(c.ms)}</td>
+                      <td>${c.suggestedMs != null ? fmtMS(c.suggestedMs) : '—'}</td>
+                      <td colspan="2"></td>
+                    </tr>`,
+                  )
+                  .join('')}`,
               )
               .join('')}
           </tbody>
         </table>
       </div>
-      ${a.totalScoreMax != null && s.totalScore != null && a.allScored && Math.abs(a.sumScores - s.totalScore) > 0.01 ? `<p class="hint warn">模块得分合计 ${fmtScore(a.sumScores)} ≠ 总得分 ${fmtScore(s.totalScore)}</p>` : ''}
+      ${a.manualTotal != null && a.allScored && Math.abs(a.derivedTotal - a.manualTotal) > 0.01 ? `<p class="hint warn">模块合计 ${fmtScore(a.derivedTotal)}，手填总分 ${fmtScore(a.manualTotal)}，已按手填为准</p>` : ''}
+      ${!a.allScored && a.hasScores ? '<p class="hint">部分模块还没录分，补全后才能算总分。</p>' : ''}
     </section>
 
     ${scoreCardHTML(s, a)}
@@ -474,24 +577,35 @@ function scoreCardHTML(s, a) {
     <div class="card-head"><h2>得分录入</h2><span class="hint">${a.hasScores ? '可随时修改' : '选填'}</span></div>
     <div class="field-row">
       <label class="field">
-        <span>总得分</span>
+        <span>总得分<em>不填则按模块合计</em></span>
         <input id="f-total-score" type="number" inputmode="decimal" min="0" step="0.5"
           placeholder="${hasMax ? `满分 ${fmtScore(s.plan.totalScore)}` : '选填'}" value="${s.totalScore == null ? '' : s.totalScore}">
       </label>
       <div class="field score-preview">
-        <span>得分率</span>
-        <b>${a.scoreRate != null ? pct(a.scoreRate, 1) : '—'}</b>
+        <span>统计总分</span>
+        <b id="totalPreview">${a.effectiveTotal != null ? fmtScore(a.effectiveTotal) : '—'}</b>
       </div>
     </div>
     <div class="score-list">
       ${s.modules
-        .map(
-          (m) => `<label class="score-row">
-            <span class="sr-name">${esc(m.name)}</span>
-            <input data-mod="${m.id}" class="module-score" type="number" inputmode="decimal" min="0" step="0.5"
-              placeholder="${m.maxScore != null ? `满分 ${fmtScore(m.maxScore)}` : '选填'}" value="${m.score == null ? '' : m.score}">
-          </label>`,
-        )
+        .map((m) => {
+          const per = perQuestionScore(m);
+          if (m.questionCount != null) {
+            const maxScore = moduleMaxScore(m);
+            return `<div class="score-row">
+              <span class="sr-name">${esc(m.name)}<small>${m.questionCount} 题 · 每题 ${fmtScore(per)} 分${maxScore != null ? ` · 满分 ${fmtScore(maxScore)}` : ''}</small></span>
+              <span class="sr-unit">对</span>
+              <input data-mod="${m.id}" data-kind="correct" type="number" inputmode="numeric" min="0" step="1"
+                max="${m.questionCount}" placeholder="题数" value="${m.correctCount == null ? '' : m.correctCount}">
+            </div>`;
+          }
+          return `<div class="score-row">
+            <span class="sr-name">${esc(m.name)}<small>${m.maxScore != null ? `满分 ${fmtScore(m.maxScore)}` : '未设满分'}</small></span>
+            <span class="sr-unit">分</span>
+            <input data-mod="${m.id}" data-kind="score" type="number" inputmode="decimal" min="0" step="0.5"
+              placeholder="得分" value="${m.score == null ? '' : m.score}">
+          </div>`;
+        })
         .join('')}
     </div>
     <label class="field">
@@ -506,27 +620,71 @@ function scoreCardHTML(s, a) {
 
 views.templates = () => {
   const data = store.db();
+  const kind = ui.tplKind;
+  const seg = `<div class="seg">
+    <button class="seg-btn${kind === 'modules' ? ' on' : ''}" data-act="tpl-seg" data-kind="modules">模块模版</button>
+    <button class="seg-btn${kind === 'exams' ? ' on' : ''}" data-act="tpl-seg" data-kind="exams">考试模版</button>
+  </div>`;
+
+  if (kind === 'exams') {
+    return `<main class="page sub">
+      ${pageHead('模版')}
+      ${seg}
+      <p class="page-desc">考试模版 = 一场考试的全部预设：默认考试名称、起止时间、用哪个模块模版、总分。新建考试时选它就一键带出。</p>
+      ${data.examTemplates.length === 0 ? '<p class="empty">还没有考试模版。</p>' : ''}
+      <ul class="tpl-list">
+        ${data.examTemplates
+          .map(
+            (e) => `<li class="tpl-item">
+              <button class="tpl-main" data-act="etpl-edit" data-id="${e.id}">
+                <b>${esc(e.name)}</b>
+                <small>${msToHM(e.startVirtual)} – ${msToHM(e.endVirtual)} · ${esc((store.findTemplate(e.templateId) || {}).name || `默认模块 × ${e.moduleCount}`)}${e.totalScore != null ? ` · 满分 ${fmtScore(e.totalScore)}` : ''}</small>
+              </button>
+              <button class="icon-btn" data-act="etpl-delete" data-id="${e.id}" aria-label="删除">×</button>
+            </li>`,
+          )
+          .join('')}
+      </ul>
+      <button class="btn primary big" data-act="tpl-new-exam">+ 新建考试模版</button>
+      ${navHTML('templates')}
+    </main>`;
+  }
+
   return `<main class="page sub">
-    ${pageHead('模块模版')}
-    <p class="page-desc">预先排好模块顺序（如 图推 → 判断推理 → 资料分析），开考时一键套用。每个模块的满分可以填，也可以不填。</p>
-    ${data.templates.length === 0 ? '<p class="empty">还没有模版，先建一个吧。</p>' : ''}
+    ${pageHead('模版')}
+    ${seg}
+    <p class="page-desc">模块模版决定考试里模块的顺序与结构：可设二级模块、题目数、每题分值、建议用时。满分可不填。</p>
+    ${data.templates.length === 0 ? '<p class="empty">还没有模块模版，先建一个吧。</p>' : ''}
     <ul class="tpl-list">
       ${data.templates
         .map(
           (t) => `<li class="tpl-item">
             <button class="tpl-main" data-act="tpl-edit" data-id="${t.id}">
               <b>${esc(t.name)}</b>
-              <small>${t.modules.length} 个模块 · ${t.modules.map((m) => esc(m.name)).join(' / ')}</small>
+              <small>${t.modules.length} 个模块${t.modules.some((m) => m.children.length) ? '（含二级模块）' : ''} · ${t.modules.map((m) => esc(m.name)).join(' / ')}</small>
             </button>
             <button class="icon-btn" data-act="tpl-delete" data-id="${t.id}" aria-label="删除">×</button>
           </li>`,
         )
         .join('')}
     </ul>
-    <button class="btn primary big" data-act="tpl-new">+ 新建模版</button>
+    <button class="btn primary big" data-act="tpl-new">+ 新建模块模版</button>
     ${navHTML('templates')}
   </main>`;
 };
+
+/* ---- 模块模版编辑器 ---- */
+
+function emptyModuleDraft(i) {
+  return {
+    name: `模块${cnNum(i + 1)}`,
+    maxScore: null,
+    questionCount: null,
+    perQuestionScore: null,
+    suggestedMinutes: null,
+    children: [],
+  };
+}
 
 function tplDraftFromTemplate(t) {
   return {
@@ -534,8 +692,15 @@ function tplDraftFromTemplate(t) {
     id: t ? t.id : null,
     name: t ? t.name : '',
     modules: t
-      ? t.modules.map((m) => ({ name: m.name, maxScore: m.maxScore }))
-      : [{ name: '', maxScore: null }, { name: '', maxScore: null }],
+      ? t.modules.map((m) => ({
+          name: m.name,
+          maxScore: m.maxScore,
+          questionCount: m.questionCount,
+          perQuestionScore: m.perQuestionScore,
+          suggestedMinutes: m.suggestedMinutes,
+          children: (m.children || []).map((c) => ({ name: c.name, suggestedMinutes: c.suggestedMinutes })),
+        }))
+      : [emptyModuleDraft(0), emptyModuleDraft(1)],
     returnTo: null,
   };
 }
@@ -544,7 +709,7 @@ views.tplEdit = () => {
   const t = ui.tpl;
   if (!t) return views.templates();
   return `<main class="page sub">
-    ${pageHead(t.id ? '编辑模版' : '新建模版', { right: '<button class="text-btn" data-act="tpl-save">保存</button>' })}
+    ${pageHead(t.id ? '编辑模块模版' : '新建模块模版', { right: '<button class="text-btn" data-act="tpl-save">保存</button>' })}
     <section class="card">
       <label class="field">
         <span>模版名称</span>
@@ -556,16 +721,40 @@ views.tplEdit = () => {
       <ul class="tpl-mods">
         ${t.modules
           .map(
-            (m, i) => `<li class="tpl-row">
-              <span class="idx">${i + 1}</span>
-              <div class="tpl-inputs">
-                <input class="tpl-name-in" data-i="${i}" data-field="name" type="text" placeholder="模块名，如 资料分析" value="${esc(m.name)}">
-                <input class="tpl-max-in" data-i="${i}" data-field="max" type="number" inputmode="decimal" min="0" step="0.5" placeholder="满分" value="${m.maxScore == null ? '' : m.maxScore}">
+            (m, i) => `<li class="tpl-card">
+              <div class="tpl-card-head">
+                <span class="idx">${i + 1}</span>
+                <input class="tpl-name-in" data-i="${i}" type="text" placeholder="模块名，如 资料分析" value="${esc(m.name)}">
+                <div class="tpl-actions">
+                  <button class="mini" data-act="tpl-up" data-i="${i}" ${i === 0 ? 'disabled' : ''} aria-label="上移">↑</button>
+                  <button class="mini" data-act="tpl-down" data-i="${i}" ${i === t.modules.length - 1 ? 'disabled' : ''} aria-label="下移">↓</button>
+                  <button class="mini danger" data-act="tpl-remove" data-i="${i}" ${t.modules.length <= 1 ? 'disabled' : ''} aria-label="删除">×</button>
+                </div>
               </div>
-              <div class="tpl-actions">
-                <button class="mini" data-act="tpl-up" data-i="${i}" ${i === 0 ? 'disabled' : ''} aria-label="上移">↑</button>
-                <button class="mini" data-act="tpl-down" data-i="${i}" ${i === t.modules.length - 1 ? 'disabled' : ''} aria-label="下移">↓</button>
-                <button class="mini danger" data-act="tpl-remove" data-i="${i}" ${t.modules.length <= 1 ? 'disabled' : ''} aria-label="删除">×</button>
+              <div class="tpl-grid">
+                <label><span>建议用时（分）</span><input class="tpl-sug-in" data-i="${i}" type="number" inputmode="decimal" min="0" step="1" placeholder="选填" value="${m.suggestedMinutes == null ? '' : m.suggestedMinutes}"></label>
+                <label><span>题目数</span><input class="tpl-q-in" data-i="${i}" type="number" inputmode="numeric" min="0" step="1" placeholder="选填" value="${m.questionCount == null ? '' : m.questionCount}"></label>
+                <label><span>每题分值</span><input class="tpl-qp-in" data-i="${i}" type="number" inputmode="decimal" min="0" step="0.1" placeholder="默认 1" value="${m.perQuestionScore == null ? '' : m.perQuestionScore}"></label>
+                <label><span>满分（选填）</span><input class="tpl-max-in" data-i="${i}" type="number" inputmode="decimal" min="0" step="0.5" placeholder="可不填" value="${m.maxScore == null ? '' : m.maxScore}"></label>
+              </div>
+              <div class="tpl-subs">
+                <div class="tpl-subs-head">
+                  <span>二级模块${m.children.length ? `（${m.children.length}）` : ''}</span>
+                  <button class="text-btn dim" data-act="sub-add" data-i="${i}">+ 添加</button>
+                </div>
+                ${
+                  m.children.length
+                    ? `<ul class="sub-list">${m.children
+                        .map(
+                          (c, ci) => `<li>
+                            <input class="sub-name-in" data-i="${i}" data-ci="${ci}" type="text" placeholder="子模块名" value="${esc(c.name)}">
+                            <input class="sub-sug-in" data-i="${i}" data-ci="${ci}" type="number" inputmode="decimal" min="0" step="1" placeholder="建议(分)" value="${c.suggestedMinutes == null ? '' : c.suggestedMinutes}">
+                            <button class="mini danger" data-act="sub-remove" data-i="${i}" data-ci="${ci}" aria-label="删除子模块">×</button>
+                          </li>`,
+                        )
+                        .join('')}</ul>`
+                    : '<p class="hint">不填则这个模块整体计时；填了以后按子模块逐个计时，用时仍计入本模块。</p>'
+                }
               </div>
             </li>`,
           )
@@ -587,11 +776,116 @@ function syncTplDraft() {
     const i = Number(inp.dataset.i);
     if (t.modules[i]) t.modules[i].name = inp.value;
   });
+  $$('.tpl-sug-in').forEach((inp) => {
+    const i = Number(inp.dataset.i);
+    if (t.modules[i]) t.modules[i].suggestedMinutes = numOrNull(inp.value);
+  });
+  $$('.tpl-q-in').forEach((inp) => {
+    const i = Number(inp.dataset.i);
+    if (t.modules[i]) t.modules[i].questionCount = numOrNull(inp.value);
+  });
+  $$('.tpl-qp-in').forEach((inp) => {
+    const i = Number(inp.dataset.i);
+    if (t.modules[i]) t.modules[i].perQuestionScore = numOrNull(inp.value);
+  });
   $$('.tpl-max-in').forEach((inp) => {
     const i = Number(inp.dataset.i);
     if (t.modules[i]) t.modules[i].maxScore = numOrNull(inp.value);
   });
+  $$('.sub-name-in').forEach((inp) => {
+    const i = Number(inp.dataset.i);
+    const ci = Number(inp.dataset.ci);
+    if (t.modules[i] && t.modules[i].children[ci]) t.modules[i].children[ci].name = inp.value;
+  });
+  $$('.sub-sug-in').forEach((inp) => {
+    const i = Number(inp.dataset.i);
+    const ci = Number(inp.dataset.ci);
+    if (t.modules[i] && t.modules[i].children[ci]) {
+      t.modules[i].children[ci].suggestedMinutes = numOrNull(inp.value);
+    }
+  });
   return t;
+}
+
+/* ---- 考试模版编辑器 ---- */
+
+function examTplDraft(e) {
+  return {
+    kind: 'etpl',
+    id: e ? e.id : null,
+    name: e ? e.name : '',
+    start: e ? msToHM(e.startVirtual) : '09:00',
+    end: e ? msToHM(e.endVirtual) : '11:00',
+    templateId: e ? e.templateId : null,
+    moduleCount: e ? e.moduleCount : 4,
+    totalScore: e && e.totalScore != null ? String(e.totalScore) : '',
+    returnTo: null,
+  };
+}
+
+views.examTplEdit = () => {
+  const e = ui.etpl;
+  if (!e) return views.templates();
+  const data = store.db();
+  const choices = [
+    { id: '', title: `默认模块 × ${e.moduleCount}`, sub: '按顺序生成「模块一、模块二…」' },
+    ...data.templates.map((t) => ({ id: t.id, title: t.name, sub: t.modules.map((m) => m.name).slice(0, 5).join(' · ') })),
+  ];
+  return `<main class="page sub">
+    ${pageHead(e.id ? '编辑考试模版' : '新建考试模版', { right: '<button class="text-btn" data-act="etpl-save">保存</button>' })}
+    <section class="card">
+      <label class="field">
+        <span>模版名称</span>
+        <input id="e-name" type="text" placeholder="例：国考行测 上午场" value="${esc(e.name)}">
+      </label>
+      <div class="field-row">
+        <label class="field"><span>默认开始时间</span><input id="e-start" type="time" value="${e.start}"></label>
+        <label class="field"><span>默认结束时间</span><input id="e-end" type="time" value="${e.end}"></label>
+      </div>
+      <p class="hint" id="e-dur">${durLabelHTML(e.start, e.end)}</p>
+      <label class="field">
+        <span>默认总分<em>选填</em></span>
+        <input id="e-total" type="number" inputmode="decimal" min="0" step="0.5" placeholder="不填也可以" value="${esc(e.totalScore)}">
+      </label>
+    </section>
+    <section class="card">
+      <div class="card-head"><h2>默认模块模版</h2></div>
+      <div class="radio-list">
+        ${choices
+          .map(
+            (c) => `<button class="radio-row${(c.id || '') === (e.templateId || '') ? ' on' : ''}" data-act="etpl-pick" data-id="${c.id}">
+              <span class="radio-dot"></span>
+              <span class="radio-body"><b>${esc(c.title)}</b><small>${esc(c.sub)}</small></span>
+            </button>`,
+          )
+          .join('')}
+      </div>
+      ${e.templateId ? '' : `<div class="stepper">
+          <span>模块数量</span>
+          <div>
+            <button class="step-btn" data-act="etpl-count" data-delta="-1" ${e.moduleCount <= 2 ? 'disabled' : ''}>−</button>
+            <b>${e.moduleCount}</b>
+            <button class="step-btn" data-act="etpl-count" data-delta="1" ${e.moduleCount >= 8 ? 'disabled' : ''}>+</button>
+          </div>
+        </div>`}
+    </section>
+    <button class="btn primary big" data-act="etpl-save">保存考试模版</button>
+    ${e.id ? '<button class="btn danger-ghost" data-act="etpl-delete-current">删除这个考试模版</button>' : ''}
+  </main>`;
+};
+
+function syncExamTplDraft() {
+  const e = ui.etpl;
+  if (!e) return null;
+  const name = $('#e-name');
+  const start = $('#e-start');
+  const end = $('#e-end');
+  const total = $('#e-total');
+  if (name) e.name = name.value;
+  if (start && parseHM(start.value) != null) e.start = start.value;
+  if (end && parseHM(end.value) != null) e.end = end.value;
+  if (total) e.totalScore = total.value;
+  return e;
 }
 
 /* ------------------------------------------------------------- 记录 */
@@ -607,20 +901,21 @@ views.history = () => {
       ? '<p class="empty">还没有完成过模拟考试。开始一场试试？</p>'
       : `<ul class="hist-list">
           ${list
-            .map(
-              (s) => `<li>
+            .map((s) => {
+              const a = analyze(s);
+              return `<li>
                 <button class="hist-item" data-act="open-session" data-id="${s.id}">
                   <span class="hist-main">
                     <b>${esc(s.name || '模拟考试')}</b>
                     <small>${fmtDateTime(s.startedAt)} · ${esc(s.templateName || '')}${s.finishReason === 'timeup' ? ' · 时间到' : ''}</small>
                   </span>
                   <span class="hist-side">
-                    <b>${s.totalScore != null ? fmtScore(s.totalScore) + (s.plan.totalScore ? `<i>/${fmtScore(s.plan.totalScore)}</i>` : '') : fmtMS(sumModuleMs(s))}</b>
-                    <small>${s.totalScore != null ? '得分' : '用时'}</small>
+                    <b>${a.effectiveTotal != null ? fmtScore(a.effectiveTotal) + (s.plan.totalScore ? `<i>/${fmtScore(s.plan.totalScore)}</i>` : '') : fmtMS(sumModuleMs(s))}</b>
+                    <small>${a.effectiveTotal != null ? '得分' : '用时'}</small>
                   </span>
                 </button>
-              </li>`,
-            )
+              </li>`;
+            })
             .join('')}
         </ul>`}
     ${navHTML('history')}
@@ -639,13 +934,11 @@ function render() {
 }
 
 function afterRender() {
-  if (ui.view === 'exam') {
-    startTicking();
-  }
+  if (ui.view === 'exam') startTicking();
 }
 
 function go(view, params = {}) {
-  if (view !== 'newExam') ui.draft = ui.draft && ui.draft.kind === 'exam' ? null : ui.draft;
+  if (view !== 'newExam' && ui.draft && ui.draft.kind === 'exam') ui.draft = null;
   ui.view = view;
   ui.params = params;
   render();
@@ -693,11 +986,31 @@ function tick() {
   const bar = $('#barFill');
   if (bar) bar.style.width = `${Math.min(100, Math.max(0, (used / s.plan.durationMs) * 100)).toFixed(2)}%`;
 
-  const idx = currentIndex(s);
-  if (idx >= 0) {
-    const m = s.modules[idx];
-    const started = m.startedAt || now;
-    setText('#modTimer', fmtMS(now - started));
+  const cur = currentStep(s);
+  if (cur) {
+    const started = cur.step.startedAt || now;
+    const stepMs = Math.max(0, now - started);
+    setText('#modTimer', fmtMS(stepMs));
+    const target = cur.isChild ? stepSuggestedMs(cur.module, cur.step) : moduleSuggestedMs(cur.module);
+    const targetEl = $('#modTarget');
+    if (targetEl) {
+      if (!target) {
+        targetEl.textContent = '';
+        targetEl.className = 'cm-target';
+      } else {
+        const diff = stepMs - target;
+        const text = diff > 0
+          ? `建议 ${fmtMS(target)} · 已超出 ${fmtMS(diff)}`
+          : `建议 ${fmtMS(target)} · 还剩 ${fmtMS(-diff)}`;
+        if (targetEl.textContent !== text) targetEl.textContent = text;
+        targetEl.className = `cm-target${diff > 0 ? ' over' : diff > -5 * 60000 ? ' near' : ''}`;
+      }
+    }
+    if (cur.isChild) {
+      const parentLeft = moduleSuggestedMs(cur.module);
+      const parentUsed = cur.module.children.reduce((a, c) => a + (c.elapsedMs || 0), 0) + stepMs;
+      if (parentLeft) setText('#modParent', `本模块合计 ${fmtMS(parentUsed)} / 建议 ${fmtMS(parentLeft)}`);
+    }
   }
 
   if (remain <= 0 && !ui.ending) {
@@ -726,7 +1039,7 @@ async function requestWakeLock() {
   try {
     wakeLock = await navigator.wakeLock.request('screen');
   } catch (err) {
-    /* 用户拒绝或系统不支持，忽略 */
+    /* 忽略 */
   }
 }
 
@@ -736,13 +1049,6 @@ function releaseWakeLock() {
     wakeLock = null;
   }
 }
-
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && ui.view === 'exam') {
-    tick();
-    requestWakeLock();
-  }
-});
 
 /* --------------------------------------------------------------- 提示音 */
 
@@ -799,10 +1105,19 @@ function startExam() {
   if (existing) store.removeSession(existing.id);
 
   const tpl = d.templateId ? store.findTemplate(d.templateId) : null;
-  const basic = tpl
-    ? tpl.modules.map((m) => ({ name: m.name, maxScore: m.maxScore }))
-    : defaultModules(d.moduleCount).map((m) => ({ name: m.name, maxScore: null }));
-  if (!basic.length) {
+  const source = tpl
+    ? tpl.modules.map((m) => ({
+        name: m.name,
+        maxScore: m.maxScore,
+        questionCount: m.questionCount,
+        perQuestionScore: m.perQuestionScore,
+        suggestedMinutes: m.suggestedMinutes,
+        children: (m.children || []).map((c) => ({ name: c.name, suggestedMinutes: c.suggestedMinutes })),
+      }))
+    : defaultModules(d.moduleCount).map((m) => ({
+        name: m.name, maxScore: null, questionCount: null, perQuestionScore: null, suggestedMinutes: null, children: [],
+      }));
+  if (!source.length) {
     toast('至少要有一个模块');
     return;
   }
@@ -812,22 +1127,35 @@ function startExam() {
     id: uid('ses'),
     name: String(d.name || '').trim(),
     templateId: tpl ? tpl.id : null,
-    templateName: tpl ? tpl.name : `默认模块 × ${basic.length}`,
+    templateName: tpl ? tpl.name : `默认模块 × ${source.length}`,
+    examTemplateId: d.examTemplateId || null,
     plan: {
       startVirtual: startV,
       endVirtual: endV,
       durationMs: durationFor(startV, endV),
       totalScore: numOrNull(d.totalScore),
     },
-    modules: basic.map((m, i) => ({
+    modules: source.map((m) => ({
       id: uid('sm'),
       name: m.name,
       maxScore: numOrNull(m.maxScore),
+      questionCount: numOrNull(m.questionCount),
+      perQuestionScore: numOrNull(m.perQuestionScore),
+      suggestedMinutes: numOrNull(m.suggestedMinutes),
+      correctCount: null,
       score: null,
-      startedAt: i === 0 ? now : null,
+      startedAt: null,
       endedAt: null,
       elapsedMs: 0,
       skipped: false,
+      children: (m.children || []).map((c) => ({
+        id: uid('ss'),
+        name: c.name,
+        suggestedMinutes: numOrNull(c.suggestedMinutes),
+        startedAt: null,
+        endedAt: null,
+        elapsedMs: 0,
+      })),
     })),
     status: 'running',
     startedAt: now,
@@ -838,6 +1166,9 @@ function startExam() {
     scoresFilled: false,
   };
 
+  const first = allSteps(session)[0];
+  if (first) first.step.startedAt = now;
+
   const data = store.db();
   data.sessions.push(session);
   data.settings.lastSetup = {
@@ -845,6 +1176,7 @@ function startExam() {
     endVirtual: endV,
     moduleCount: d.moduleCount,
     templateId: tpl ? tpl.id : null,
+    examTemplateId: d.examTemplateId || null,
     totalScore: numOrNull(d.totalScore),
   };
   store.save();
@@ -856,22 +1188,17 @@ function startExam() {
   render();
 }
 
-function completeModule() {
+function completeStepAction() {
   const s = currentExam();
   if (!s || s.status !== 'running') return;
-  const idx = currentIndex(s);
-  if (idx < 0) return;
-  const now = Date.now();
-  const m = s.modules[idx];
-  if (!m.startedAt) m.startedAt = now;
-  m.endedAt = now;
-  m.elapsedMs = Math.max(0, now - m.startedAt);
-  const next = s.modules[idx + 1];
-  if (next) next.startedAt = now;
+  const cur = currentStep(s);
+  if (!cur) return;
+  const isLast = allSteps(s).filter((x) => x.step.endedAt == null).length <= 1;
+  completeCurrentStep(s, Date.now());
   store.save();
   beep(1, 1040);
   buzz();
-  if (!next) {
+  if (isLast) {
     if (window.confirm('全部模块已完成，现在交卷？')) {
       finishExam(s, 'manual');
       return;
@@ -880,24 +1207,14 @@ function completeModule() {
   renderModules();
 }
 
-function undoModule() {
+function undoStepAction() {
   const s = currentExam();
   if (!s || s.status !== 'running') return;
-  const doneIdx = [];
-  s.modules.forEach((m, i) => { if (m.endedAt != null) doneIdx.push(i); });
-  if (!doneIdx.length) return;
-  const target = doneIdx[doneIdx.length - 1];
-  const now = Date.now();
-  s.modules.forEach((m, i) => {
-    if (i >= target) {
-      m.endedAt = null;
-      m.elapsedMs = 0;
-      m.startedAt = i === target ? now : null;
-    }
-  });
+  const target = undoLastStep(s, Date.now());
+  if (!target) return;
   store.save();
   renderModules();
-  toast(`已撤销「${s.modules[target].name}」，重新计时`);
+  toast(`已撤销「${target.step.name}」，重新计时`);
 }
 
 function renderModules() {
@@ -911,16 +1228,9 @@ function renderModules() {
 
 function finishExam(s, reason) {
   if (!s || s.status !== 'running') return;
-  const now = Date.now();
-  const idx = currentIndex(s);
-  if (idx >= 0) {
-    const m = s.modules[idx];
-    if (!m.startedAt) m.startedAt = now;
-    m.endedAt = now;
-    m.elapsedMs = Math.max(0, now - m.startedAt);
-  }
+  closeCurrentStep(s, Date.now());
   s.status = 'finished';
-  s.finishedAt = now;
+  s.finishedAt = Date.now();
   s.finishReason = reason;
   store.save();
   stopTicking();
@@ -937,6 +1247,17 @@ function finishExam(s, reason) {
   render();
 }
 
+function submitExam() {
+  const s = currentExam();
+  if (!s) return;
+  const cur = currentStep(s);
+  const msg = cur
+    ? `提前交卷？「${cur.step.name}」未完成的用时也会记入。`
+    : '交卷并查看分析？';
+  if (!window.confirm(msg)) return;
+  finishExam(s, 'manual');
+}
+
 function abandonExam() {
   const s = currentExam();
   if (!s) return;
@@ -950,16 +1271,57 @@ function abandonExam() {
 
 /* ----------------------------------------------------------- 得分保存 */
 
+function readScoreInputs(s) {
+  const values = {};
+  s.modules.forEach((m) => {
+    const input = $(`input[data-mod="${m.id}"]`);
+    values[m.id] = input ? numOrNull(input.value) : null;
+  });
+  const totalEl = $('#f-total-score');
+  return { values, total: totalEl ? numOrNull(totalEl.value) : null };
+}
+
+function applyScores(s, raw) {
+  s.modules.forEach((m) => {
+    const v = raw.values[m.id];
+    if (m.questionCount != null) {
+      m.correctCount = v;
+      m.score = v == null ? null : v * perQuestionScore(m);
+    } else {
+      m.score = v;
+    }
+  });
+  // 手填总分优先；清空则回到「各模块合计」
+  s.totalScore = raw.total;
+  s.scoresFilled = s.totalScore != null || s.modules.some((m) => moduleScore(m) != null);
+}
+
+function liveScorePreview() {
+  const s = sessionOf(ui.params.id);
+  if (!s) return;
+  const raw = readScoreInputs(s);
+  const clone = {
+    ...s,
+    modules: s.modules.map((m) => {
+      const v = raw.values[m.id];
+      return m.questionCount != null
+        ? { ...m, correctCount: v, score: v == null ? null : v * perQuestionScore(m) }
+        : { ...m, score: v };
+    }),
+    totalScore: raw.total,
+  };
+  const preview = $('#totalPreview');
+  if (preview) {
+    const a = analyze({ ...clone, finishedAt: clone.finishedAt || Date.now() });
+    preview.textContent = a.effectiveTotal != null ? fmtScore(a.effectiveTotal) : '—';
+  }
+}
+
 function saveScores(id) {
   const s = sessionOf(id);
   if (!s) return;
-  s.totalScore = numOrNull($('#f-total-score') ? $('#f-total-score').value : '');
-  $$('.module-score').forEach((inp) => {
-    const m = s.modules.find((x) => x.id === inp.dataset.mod);
-    if (m) m.score = numOrNull(inp.value);
-  });
+  applyScores(s, readScoreInputs(s));
   s.note = $('#f-note') ? $('#f-note').value : s.note;
-  s.scoresFilled = s.totalScore != null || s.modules.some((m) => m.score != null);
   store.save();
   render();
   toast('得分已保存');
@@ -976,7 +1338,16 @@ function saveTemplate() {
     return;
   }
   const modules = t.modules
-    .map((m) => ({ name: String(m.name || '').trim(), maxScore: numOrNull(m.maxScore) }))
+    .map((m) => ({
+      name: String(m.name || '').trim(),
+      maxScore: numOrNull(m.maxScore),
+      questionCount: numOrNull(m.questionCount),
+      perQuestionScore: numOrNull(m.perQuestionScore),
+      suggestedMinutes: numOrNull(m.suggestedMinutes),
+      children: (m.children || [])
+        .map((c) => ({ name: String(c.name || '').trim(), suggestedMinutes: numOrNull(c.suggestedMinutes) }))
+        .filter((c) => c.name),
+    }))
     .filter((m) => m.name);
   if (!modules.length) {
     toast('至少填一个模块名');
@@ -984,21 +1355,25 @@ function saveTemplate() {
   }
   const data = store.db();
   const now = Date.now();
+  const payload = modules.map((m) => ({
+    id: uid('tmod'),
+    name: m.name,
+    maxScore: m.maxScore,
+    questionCount: m.questionCount,
+    perQuestionScore: m.perQuestionScore,
+    suggestedMinutes: m.suggestedMinutes,
+    children: m.children.map((c) => ({ id: uid('tsub'), ...c })),
+  }));
+
   if (t.id) {
     const target = data.templates.find((x) => x.id === t.id);
     if (target) {
       target.name = name;
-      target.modules = modules.map((m) => ({ id: uid('tmod'), name: m.name, maxScore: m.maxScore }));
+      target.modules = payload;
       target.updatedAt = now;
     }
   } else {
-    const created = {
-      id: uid('tpl'),
-      name,
-      modules: modules.map((m) => ({ id: uid('tmod'), name: m.name, maxScore: m.maxScore })),
-      createdAt: now,
-      updatedAt: now,
-    };
+    const created = { id: uid('tpl'), name, modules: payload, createdAt: now, updatedAt: now };
     data.templates.push(created);
     if (ui.tpl.returnTo === 'new') {
       const d = newExamDraft();
@@ -1015,8 +1390,48 @@ function saveTemplate() {
   } else {
     ui.tpl = null;
     ui.view = 'templates';
+    ui.tplKind = 'modules';
     render();
   }
+}
+
+function saveExamTemplate() {
+  const e = syncExamTplDraft();
+  if (!e) return;
+  const name = String(e.name || '').trim();
+  if (!name) {
+    toast('给考试模版起个名字');
+    return;
+  }
+  const startV = parseHM(e.start);
+  const endV = parseHM(e.end);
+  if (startV == null || endV == null) {
+    toast('请填写有效的开始 / 结束时间');
+    return;
+  }
+  const data = store.db();
+  const now = Date.now();
+  const payload = {
+    name,
+    startVirtual: startV,
+    endVirtual: endV,
+    templateId: e.templateId || null,
+    moduleCount: clamp(e.moduleCount || 4, 2, 8),
+    totalScore: numOrNull(e.totalScore),
+    updatedAt: now,
+  };
+  if (e.id) {
+    const target = data.examTemplates.find((x) => x.id === e.id);
+    if (target) Object.assign(target, payload);
+  } else {
+    data.examTemplates.push({ id: uid('etpl'), createdAt: now, ...payload });
+  }
+  store.save();
+  toast('考试模版已保存');
+  ui.etpl = null;
+  ui.view = 'templates';
+  ui.tplKind = 'exams';
+  render();
 }
 
 /* --------------------------------------------------------------- 事件 */
@@ -1024,6 +1439,7 @@ function saveTemplate() {
 function onAct(act, el) {
   switch (act) {
     case 'go':
+      ui.tplKind = el.dataset.view === 'templates' ? ui.tplKind : ui.tplKind;
       go(el.dataset.view, {});
       break;
     case 'back':
@@ -1033,6 +1449,11 @@ function onAct(act, el) {
       } else if (ui.view === 'tplEdit') {
         ui.tpl = null;
         ui.view = 'templates';
+        ui.tplKind = 'modules';
+      } else if (ui.view === 'examTplEdit') {
+        ui.etpl = null;
+        ui.view = 'templates';
+        ui.tplKind = 'exams';
       } else {
         ui.view = 'home';
       }
@@ -1041,6 +1462,10 @@ function onAct(act, el) {
     case 'new-exam':
       ui.draft = null;
       ui.view = 'newExam';
+      render();
+      break;
+    case 'pick-exam-template':
+      applyExamTemplate(el.dataset.id || null);
       render();
       break;
     case 'pick-template':
@@ -1064,10 +1489,10 @@ function onAct(act, el) {
       render();
       break;
     case 'complete':
-      completeModule();
+      completeStepAction();
       break;
     case 'undo':
-      undoModule();
+      undoStepAction();
       break;
     case 'submit':
       submitExam();
@@ -1090,11 +1515,15 @@ function onAct(act, el) {
       ui.params = { id: el.dataset.id };
       render();
       break;
-    case 'open-session-menu':
+    case 'session-menu':
       sessionMenu(el.dataset.id);
       break;
     case 'copy-report':
       copyReport(el.dataset.id);
+      break;
+    case 'tpl-seg':
+      ui.tplKind = el.dataset.kind;
+      render();
       break;
     case 'tpl-new':
       ui.tpl = tplDraftFromTemplate(null);
@@ -1102,14 +1531,50 @@ function onAct(act, el) {
       ui.view = 'tplEdit';
       render();
       break;
+    case 'tpl-new-exam':
+      ui.etpl = examTplDraft(null);
+      ui.view = 'examTplEdit';
+      render();
+      break;
     case 'tpl-edit':
       ui.tpl = tplDraftFromTemplate(store.findTemplate(el.dataset.id));
       ui.view = 'tplEdit';
       render();
       break;
+    case 'etpl-edit':
+      ui.etpl = examTplDraft(store.findExamTemplate(el.dataset.id));
+      ui.view = 'examTplEdit';
+      render();
+      break;
+    case 'etpl-pick':
+      syncExamTplDraft();
+      ui.etpl.templateId = el.dataset.id || null;
+      render();
+      break;
+    case 'etpl-count':
+      syncExamTplDraft();
+      ui.etpl.moduleCount = clamp((ui.etpl.moduleCount || 4) + Number(el.dataset.delta), 2, 8);
+      render();
+      break;
+    case 'etpl-save':
+      saveExamTemplate();
+      break;
+    case 'etpl-delete':
+    case 'etpl-delete-current': {
+      const id = el.dataset.id || (ui.etpl && ui.etpl.id);
+      if (!id) break;
+      if (!window.confirm('删除这个考试模版？已产生的考试记录不受影响。')) break;
+      store.removeExamTemplate(id);
+      ui.etpl = null;
+      ui.view = 'templates';
+      ui.tplKind = 'exams';
+      render();
+      toast('考试模版已删除');
+      break;
+    }
     case 'tpl-add':
       syncTplDraft();
-      if (ui.tpl.modules.length < 12) ui.tpl.modules.push({ name: '', maxScore: null });
+      if (ui.tpl.modules.length < 12) ui.tpl.modules.push(emptyModuleDraft(ui.tpl.modules.length));
       render();
       break;
     case 'tpl-remove':
@@ -1137,6 +1602,23 @@ function onAct(act, el) {
       render();
       break;
     }
+    case 'sub-add': {
+      syncTplDraft();
+      const i = Number(el.dataset.i);
+      if (ui.tpl.modules[i] && ui.tpl.modules[i].children.length < 12) {
+        ui.tpl.modules[i].children.push({ name: '', suggestedMinutes: null });
+      }
+      render();
+      break;
+    }
+    case 'sub-remove': {
+      syncTplDraft();
+      const i = Number(el.dataset.i);
+      const ci = Number(el.dataset.ci);
+      if (ui.tpl.modules[i]) ui.tpl.modules[i].children.splice(ci, 1);
+      render();
+      break;
+    }
     case 'tpl-save':
       saveTemplate();
       break;
@@ -1148,6 +1630,7 @@ function onAct(act, el) {
       store.removeTemplate(id);
       ui.tpl = null;
       ui.view = 'templates';
+      ui.tplKind = 'modules';
       render();
       toast('模版已删除');
       break;
@@ -1161,17 +1644,6 @@ function onAct(act, el) {
     default:
       break;
   }
-}
-
-function submitExam() {
-  const s = currentExam();
-  if (!s) return;
-  const idx = currentIndex(s);
-  const msg = idx >= 0
-    ? `提前交卷？「${s.modules[idx].name}」未完成的用时也会记入。`
-    : '交卷并查看分析？';
-  if (!window.confirm(msg)) return;
-  finishExam(s, 'manual');
 }
 
 function sessionMenu(id) {
@@ -1251,6 +1723,15 @@ document.addEventListener('input', (e) => {
     const endEl = $('#f-end');
     if (label && startEl && endEl) label.innerHTML = durLabelHTML(startEl.value, endEl.value);
   }
+  if (t.id === 'e-start' || t.id === 'e-end') {
+    const label = $('#e-dur');
+    const startEl = $('#e-start');
+    const endEl = $('#e-end');
+    if (label && startEl && endEl) label.innerHTML = durLabelHTML(startEl.value, endEl.value);
+  }
+  if (ui.view === 'result' && (t.id === 'f-total-score' || t.dataset?.kind)) {
+    liveScorePreview();
+  }
 });
 
 document.addEventListener('change', (e) => {
@@ -1263,6 +1744,13 @@ document.addEventListener('change', (e) => {
       if (t.checked) requestWakeLock();
       else releaseWakeLock();
     }
+  }
+});
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && ui.view === 'exam') {
+    tick();
+    requestWakeLock();
   }
 });
 
@@ -1305,9 +1793,5 @@ function boot() {
     navigator.serviceWorker.register('./sw.js').catch(() => {});
   }
 }
-
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && ui.view === 'exam') tick();
-});
 
 boot();

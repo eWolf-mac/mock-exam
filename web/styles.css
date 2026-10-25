@@ -595,6 +595,101 @@ textarea { resize: vertical; line-height: 1.5; }
 }
 #toast.show { opacity: 1; transform: translate(-50%, 0); }
 
+/* ---------------------------------------------------------- 新增：模版 / 二级模块 */
+
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip {
+  padding: 8px 14px; border-radius: 999px;
+  border: 1px solid var(--line); background: transparent;
+  color: var(--text); font-size: 13px;
+}
+.chip.on { border-color: var(--green); background: rgba(61, 220, 151, .12); color: var(--green); font-weight: 600; }
+
+.tile.wide {
+  width: 100%; flex-direction: row; align-items: center; justify-content: space-between;
+  padding: 14px 18px;
+}
+.tile.wide b { font-size: 20px; }
+
+.seg {
+  display: flex; gap: 4px; padding: 4px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 13px;
+}
+.seg-btn {
+  flex: 1; padding: 9px 0; border-radius: 9px;
+  font-size: 13px; color: var(--muted);
+}
+.seg-btn.on { background: var(--card-2); color: var(--text); font-weight: 600; }
+
+/* 模块模版编辑器：每个模块一张卡 */
+.tpl-mods { display: flex; flex-direction: column; gap: 12px; }
+.tpl-card {
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 12px; border: 1px solid var(--line); border-radius: 14px;
+}
+.tpl-card-head { display: flex; align-items: center; gap: 8px; }
+.tpl-card-head .tpl-name-in { flex: 1; min-width: 0; }
+.tpl-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+.tpl-grid label { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.tpl-grid label > span { font-size: 11px; color: var(--muted); }
+.tpl-grid input { padding: 8px 10px; min-height: 42px; font-size: 16px; }
+.tpl-subs { border-top: 1px dashed var(--line); padding-top: 9px; }
+.tpl-subs-head {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 12px; color: var(--muted);
+}
+.sub-list { display: flex; flex-direction: column; gap: 7px; margin-top: 8px; }
+.sub-list li { display: flex; align-items: center; gap: 6px; }
+.sub-name-in { flex: 1; min-width: 0; min-height: 40px; padding: 8px 10px; font-size: 16px; }
+.sub-sug-in { width: 84px; flex: none; min-height: 40px; padding: 8px; font-size: 16px; }
+
+/* 考试中：二级模块 / 建议用时 */
+.cm-parent { font-size: 12px; color: var(--dim); }
+.cm-target { font-size: 12px; color: var(--muted); min-height: 16px; }
+.cm-target.near { color: var(--amber); }
+.cm-target.over { color: var(--red); font-weight: 600; }
+
+.mod.sub {
+  background: transparent; border: 1px solid transparent;
+  padding: 4px 14px 4px 30px; font-size: 13px; color: var(--muted);
+  min-height: 34px;
+}
+.mod.sub.now { border-color: rgba(61, 220, 151, .3); background: rgba(61, 220, 151, .05); color: var(--text); }
+.mod.sub .mod-idx { width: 30px; height: 20px; background: transparent; font-size: 11px; }
+.mod.sub.now .mod-idx { background: transparent; color: var(--green); font-weight: 700; }
+
+/* 结果页：建议用时 / 二级模块 */
+.bar-sug {
+  display: flex; justify-content: space-between;
+  font-size: 11px; color: var(--muted); margin-top: 5px;
+}
+.bar-sug .over { color: var(--red); }
+.bar-sug .under { color: var(--green); }
+.sub-bars { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; padding-left: 14px; }
+.sub-bars li { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted); }
+.sub-bars li span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sub-bars li b { color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums; }
+.sub-bars li i { font-style: normal; width: 38px; text-align: right; }
+
+.tbl td.over { color: var(--red); }
+.tbl tr.sub td {
+  border-top: none; padding-top: 2px; padding-bottom: 2px;
+  color: var(--muted); font-size: 12px;
+}
+.tbl tr.sub:last-child td { padding-bottom: 10px; }
+.t-name.sub { padding-left: 16px; }
+
+.sr-unit { font-size: 12px; color: var(--muted); flex: none; }
+.sr-name small { display: block; font-size: 11px; color: var(--muted); margin-top: 2px; }
+.score-row .sr-name { display: flex; flex-direction: column; }
+.score-row input { width: 84px; }
+
+.mini-tag {
+  display: inline-block; margin-left: 4px; padding: 1px 6px;
+  border-radius: 6px; background: var(--card-2); color: var(--muted); font-size: 10px;
+  font-weight: 400;
+}
+
 /* ---------------------------------------------------------- 横屏 */
 
 @media (orientation: landscape) and (max-height: 560px) {
