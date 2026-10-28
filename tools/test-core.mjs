@@ -9,6 +9,7 @@ import {
   fmtPerQuestion,
   allSteps, currentStep, completeCurrentStep, undoLastStep, closeCurrentStep,
   isModuleDone, moduleScore, moduleMaxScore, moduleSuggestedMs, stepSuggestedMs,
+  childPerQuestionScore, childScoreValue, childMaxScore, sessionGroupKey,
 } from '../web/js/core.js';
 
 let passed = 0;
@@ -228,7 +229,8 @@ test('模块得分：正确题数 × 每题分（默认 1 分）', () => {
 
 test('总分：各模块合计，手填总分优先', () => {
   const s = makeChildSession();
-  s.modules[0].correctCount = 30; // 24 分
+  s.modules[0].children[0].score = 10;
+  s.modules[0].children[1].score = 14; // 父模块 = 24
   s.modules[1].correctCount = 18; // 18 分
   s.status = 'finished';
   s.finishedAt = s.startedAt + 90 * MIN;
@@ -243,6 +245,34 @@ test('总分：各模块合计，手填总分优先', () => {
   assert.equal(a.effectiveTotal, 45);
   assert.equal(a.scoreRate, 0.45);
   assert.ok(a.insights.some((t) => t.includes('不一致')));
+});
+
+test('二级模块计分：继承一级的每题分，可覆盖', () => {
+  const parent = { questionCount: 40, perQuestionScore: 0.8, children: [] };
+  const inherit = { questionCount: 10, perQuestionScore: null, correctCount: 5 };
+  const override = { questionCount: 10, perQuestionScore: 2, correctCount: 5 };
+
+  assert.equal(childPerQuestionScore(inherit, parent), 0.8);
+  assert.equal(childScoreValue(inherit, parent), 4);
+  assert.equal(childMaxScore(inherit, parent), 8);
+
+  assert.equal(childPerQuestionScore(override, parent), 2);
+  assert.equal(childScoreValue(override, parent), 10);
+  assert.equal(childMaxScore(override, parent), 20);
+
+  parent.children = [inherit, override];
+  assert.equal(moduleScore(parent), 14, '父模块得分 = 子模块之和');
+  assert.equal(moduleMaxScore(parent), 28);
+
+  // 有一个子模块没录分 → 父模块也不算分
+  parent.children.push({ questionCount: 10, perQuestionScore: null, correctCount: null });
+  assert.equal(moduleScore(parent), null);
+});
+
+test('趋势分组键', () => {
+  assert.equal(sessionGroupKey({ examTemplateId: 'e1', templateId: 't1' }), 'e1');
+  assert.equal(sessionGroupKey({ examTemplateId: null, templateId: 't1' }), 't1');
+  assert.equal(sessionGroupKey({ examTemplateId: null, templateId: null }), '__default__');
 });
 
 console.log('建议用时');

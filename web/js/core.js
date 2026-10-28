@@ -14,7 +14,7 @@
  */
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
-export const DATA_VERSION = 2;
+export const DATA_VERSION = 3;
 
 export const MODULE_COLORS = [
   '#3DDC97', '#4AA8FF', '#FFC857', '#B983FF',
@@ -278,17 +278,51 @@ export function fmtPerQuestion(ms) {
   return s ? `${m} 分 ${s} 秒` : `${m} 分`;
 }
 
-/** 模块满分：显式满分优先，否则 题目数 × 每题分 */
+/** 模块满分：有二级模块时按二级模块合计；否则显式满分或用 题目数 × 每题分 */
 export function moduleMaxScore(m) {
   if (!m) return null;
+  if (hasChildren(m)) {
+    const vals = m.children.map((c) => childMaxScore(c, m));
+    if (vals.every((v) => v != null)) return vals.reduce((a, b) => a + b, 0);
+  }
   if (m.maxScore != null) return m.maxScore;
   if (m.questionCount != null && m.questionCount > 0) return m.questionCount * perQuestionScore(m);
   return null;
 }
 
-/** 模块得分：显式得分优先，否则 正确题数 × 每题分 */
+/** 二级模块的每题分值：自己没填就继承一级模块，再没有按 1 分 */
+export function childPerQuestionScore(child, parent) {
+  if (child && child.perQuestionScore != null) return child.perQuestionScore;
+  if (parent && parent.perQuestionScore != null) return parent.perQuestionScore;
+  return 1;
+}
+
+export function childMaxScore(child, parent) {
+  if (!child) return null;
+  if (child.maxScore != null) return child.maxScore;
+  if (child.questionCount != null && child.questionCount > 0) {
+    return child.questionCount * childPerQuestionScore(child, parent);
+  }
+  return null;
+}
+
+export function childScoreValue(child, parent) {
+  if (!child) return null;
+  if (child.score != null) return child.score;
+  if (child.correctCount != null && child.questionCount != null) {
+    return child.correctCount * childPerQuestionScore(child, parent);
+  }
+  return null;
+}
+
+/** 模块得分：有二级模块时 = 各二级模块之和（全部录完才算）；否则显式得分或 正确题数 × 每题分 */
 export function moduleScore(m) {
   if (!m) return null;
+  if (hasChildren(m)) {
+    const vals = m.children.map((c) => childScoreValue(c, m));
+    if (vals.some((v) => v == null)) return null;
+    return vals.reduce((a, b) => a + b, 0);
+  }
   if (m.score != null) return m.score;
   if (m.correctCount != null && m.questionCount != null) {
     return m.correctCount * perQuestionScore(m);
@@ -314,6 +348,14 @@ export function stepSuggestedMs(module, step) {
   const isChild = Array.isArray(module.children) && module.children.includes(step);
   if (isChild) return null;
   return moduleSuggestedMs(module);
+}
+
+/* ------------------------------------------------------------ 分组（趋势） */
+
+/** 趋势分组键：优先考试模版，其次模块模版，都没有归为默认 */
+export function sessionGroupKey(session) {
+  if (!session) return '__default__';
+  return session.examTemplateId || session.templateId || '__default__';
 }
 
 /* ------------------------------------------------------------ 默认数据结构 */
@@ -434,13 +476,23 @@ export function analyze(session) {
     else tag = { text: '一般', tone: 'muted' };
 
     const children = hasChildren(m)
-      ? m.children.map((c) => ({
-          id: c.id,
-          name: c.name,
-          ms: Math.max(0, c.elapsedMs || 0),
-          share: ms > 0 ? Math.max(0, c.elapsedMs || 0) / ms : 0,
-          suggestedMs: c.suggestedMinutes != null ? Math.round(c.suggestedMinutes * 60000) : null,
-        }))
+      ? m.children.map((c) => {
+          const cMax = childMaxScore(c, m);
+          const cScore = childScoreValue(c, m);
+          return {
+            id: c.id,
+            name: c.name,
+            ms: Math.max(0, c.elapsedMs || 0),
+            share: ms > 0 ? Math.max(0, c.elapsedMs || 0) / ms : 0,
+            suggestedMs: c.suggestedMinutes != null ? Math.round(c.suggestedMinutes * 60000) : null,
+            questionCount: c.questionCount == null ? null : c.questionCount,
+            correctCount: c.correctCount == null ? null : c.correctCount,
+            perQuestionScore: childPerQuestionScore(c, m),
+            score: cScore,
+            maxScore: cMax,
+            rate: cScore != null && cMax ? cScore / cMax : null,
+          };
+        })
       : [];
 
     return {

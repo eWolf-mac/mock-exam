@@ -1,6 +1,6 @@
 /**
  * store.js —— localStorage 持久化（Web 端）
- * 数据结构与 docs/SPEC.md 第 2 节一致；读取时自动把 v1 数据升级到 v2。
+ * 数据结构与 docs/SPEC.md 第 2 节一致；读取时自动把旧版本数据升级到当前版本。
  */
 import { defaultData, uid, numOrNull, DATA_VERSION } from './core.js';
 
@@ -22,6 +22,8 @@ function normModule(m) {
             id: c.id || uid('tsub'),
             name: String(c.name || '子模块'),
             suggestedMinutes: numOrNull(c.suggestedMinutes),
+            questionCount: numOrNull(c.questionCount),
+            perQuestionScore: numOrNull(c.perQuestionScore),
           }))
           .filter((c) => c.name)
       : [],
@@ -72,6 +74,10 @@ function normSessionModule(m) {
     base.children = m.children.map((c) => ({
       id: c.id || uid('ss'),
       name: String(c.name || '子模块'),
+      questionCount: numOrNull(c.questionCount),
+      perQuestionScore: numOrNull(c.perQuestionScore),
+      correctCount: numOrNull(c.correctCount),
+      score: numOrNull(c.score),
       suggestedMinutes: numOrNull(c.suggestedMinutes),
       startedAt: numOrNull(c.startedAt),
       endedAt: numOrNull(c.endedAt),

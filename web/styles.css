@@ -604,6 +604,7 @@ textarea { resize: vertical; line-height: 1.5; }
   color: var(--text); font-size: 13px;
 }
 .chip.on { border-color: var(--green); background: rgba(61, 220, 151, .12); color: var(--green); font-weight: 600; }
+.chip i { font-style: normal; margin-left: 5px; font-size: 11px; opacity: .65; font-weight: 500; }
 
 .tile.wide {
   width: 100%; flex-direction: row; align-items: center; justify-content: space-between;
@@ -705,6 +706,32 @@ textarea { resize: vertical; line-height: 1.5; }
   border-radius: 6px; background: var(--card-2); color: var(--muted); font-size: 10px;
   font-weight: 400;
 }
+
+/* 二级模块的题目数 / 每题分 */
+.sub-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.sub-grid label { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.sub-grid label > span { font-size: 10px; color: var(--muted); }
+.sub-grid input { min-width: 0; min-height: 38px; padding: 6px 8px; font-size: 15px; text-align: center; }
+.sub-hint { font-size: 10px; color: var(--dim); margin: 0; }
+
+/* 得分录入：按二级模块分组 */
+.score-group {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 10px; border: 1px solid var(--line); border-radius: 12px;
+}
+.score-group-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.sg-total {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 16px; font-weight: 600; color: var(--green);
+  font-variant-numeric: tabular-nums;
+}
+.sg-total i { font-style: normal; color: var(--muted); font-size: 11px; font-weight: 500; }
+.score-row.sub { background: transparent; padding: 4px 2px 4px 10px; border-left: 2px solid var(--line); border-radius: 0; }
+.score-row.sub .sr-name { font-size: 13px; }
+
+/* 记录页管理模式 */
+.head-right { display: flex; justify-content: flex-end; gap: 2px; }
+.text-btn.danger { color: var(--red); }
 
 /* ---------------------------------------------------------- 横屏 */
 

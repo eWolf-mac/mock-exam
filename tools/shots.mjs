@@ -99,6 +99,10 @@ function moduleWith({ name, sec, questionCount, perQuestionScore, suggestedMinut
   const kids = (children || []).map((c, i) => ({
     id: `c_${name}_${i}`,
     name: c.name,
+    questionCount: c.q ?? null,
+    perQuestionScore: c.qp ?? null,
+    correctCount: c.correct ?? null,
+    score: null,
     suggestedMinutes: c.suggestedMinutes ?? null,
     startedAt: 0,
     endedAt: 0,
@@ -112,8 +116,9 @@ function moduleWith({ name, sec, questionCount, perQuestionScore, suggestedMinut
     questionCount: questionCount ?? null,
     perQuestionScore: perQuestionScore ?? null,
     suggestedMinutes: suggestedMinutes ?? null,
-    correctCount: correctCount ?? null,
-    score: correctCount != null && questionCount ? correctCount * (perQuestionScore ?? 1) : null,
+    // 有二级模块时，得分由二级模块汇总，父模块自己不再记分
+    correctCount: kids.length ? null : correctCount ?? null,
+    score: !kids.length && correctCount != null && questionCount ? correctCount * (perQuestionScore ?? 1) : null,
     startedAt: 0,
     endedAt: 0,
     elapsedMs: total,
@@ -132,10 +137,10 @@ const demoModules = [
     suggestedMinutes: 35,
     correctCount: 30,
     children: [
-      { name: '图形推理', sec: 10 * 60 + 12, suggestedMinutes: 10 },
-      { name: '定义判断', sec: 9 * 60 + 40, suggestedMinutes: 10 },
-      { name: '类比推理', sec: 5 * 60 + 5, suggestedMinutes: 5 },
-      { name: '逻辑判断', sec: 13 * 60 + 48, suggestedMinutes: 10 },
+      { name: '图形推理', sec: 10 * 60 + 12, suggestedMinutes: 10, q: 10, correct: 7 },
+      { name: '定义判断', sec: 9 * 60 + 40, suggestedMinutes: 10, q: 10, correct: 8 },
+      { name: '类比推理', sec: 5 * 60 + 5, suggestedMinutes: 5, q: 10, correct: 6 },
+      { name: '逻辑判断', sec: 13 * 60 + 48, suggestedMinutes: 10, q: 10, correct: 9 },
     ],
   }),
   moduleWith({ name: '资料分析', sec: 34 * 60 + 10, questionCount: 20, perQuestionScore: 1, suggestedMinutes: 30, correctCount: 20 }),
@@ -155,7 +160,7 @@ demoModules.forEach((m) => {
 });
 
 const demo = {
-  version: 2,
+  version: 3,
   settings: {
     clockMode: 'digital',
     sound: true,
@@ -178,10 +183,10 @@ const demo = {
         {
           id: 'tm2', name: '判断推理', maxScore: null, questionCount: 40, perQuestionScore: 0.8, suggestedMinutes: 35,
           children: [
-            { id: 'ts1', name: '图形推理', suggestedMinutes: 10 },
-            { id: 'ts2', name: '定义判断', suggestedMinutes: 10 },
-            { id: 'ts3', name: '类比推理', suggestedMinutes: 5 },
-            { id: 'ts4', name: '逻辑判断', suggestedMinutes: 10 },
+            { id: 'ts1', name: '图形推理', suggestedMinutes: 10, questionCount: 10, perQuestionScore: null },
+            { id: 'ts2', name: '定义判断', suggestedMinutes: 10, questionCount: 10, perQuestionScore: null },
+            { id: 'ts3', name: '类比推理', suggestedMinutes: 5, questionCount: 10, perQuestionScore: null },
+            { id: 'ts4', name: '逻辑判断', suggestedMinutes: 10, questionCount: 10, perQuestionScore: null },
           ],
         },
         { id: 'tm3', name: '资料分析', maxScore: null, questionCount: 20, perQuestionScore: 1, suggestedMinutes: 30, children: [] },
@@ -329,6 +334,17 @@ await click('[data-act="back"]');
 await click('[data-act="go"][data-view="history"]');
 await click('[data-act="go"][data-view="trend"]');
 await shot('19-trend');
+
+/* 记录管理 / 按模版删除 */
+await evaluate('window.scrollTo(0, 0)');
+await click('[data-act="back"]');
+await shot('24-history');
+await click('[data-act="manage-on"]');
+await shot('22-history-manage');
+await click('[data-act="go-purge"]');
+await shot('23-purge');
+await click('[data-act="back"]');
+await click('[data-act="manage-off"]');
 
 /* -------------------------------------------------- 深色 + 表盘 */
 

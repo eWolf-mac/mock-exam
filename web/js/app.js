@@ -6,7 +6,8 @@ import {
   parseHM, durationFor, numOrNull, virtualNow, remainingMs, elapsedWall, analyze, reportText,
   defaultModules, MODULE_COLORS, allSteps, currentStep, completeCurrentStep, undoLastStep,
   closeCurrentStep, isModuleDone, hasChildren, moduleScore, moduleMaxScore, moduleSuggestedMs,
-  stepSuggestedMs, perQuestionScore,
+  stepSuggestedMs, perQuestionScore, childPerQuestionScore, childMaxScore, childScoreValue,
+  sessionGroupKey,
 } from './core.js';
 import * as store from './store.js';
 
@@ -27,6 +28,8 @@ const ui = {
   ending: false,
   warned: {},
   trendMode: 'score',
+  trendGroup: 'all',
+  manage: false,
 };
 
 const views = {};
@@ -578,8 +581,59 @@ views.result = () => {
   </main>`;
 };
 
+function scoreInputCell({ modId, ci, kind, questionCount, correctCount, score }) {
+  const isCorrect = kind === 'correct';
+  return `<span class="sr-unit">${isCorrect ? '对' : '分'}</span>
+    <input data-mod="${modId}"${ci == null ? '' : ` data-ci="${ci}"`} data-kind="${kind}"
+      type="number" inputmode="${isCorrect ? 'numeric' : 'decimal'}" min="0"
+      step="${isCorrect ? 1 : 0.5}"${isCorrect && questionCount != null ? ` max="${questionCount}"` : ''}
+      placeholder="${isCorrect ? '题数' : '得分'}"
+      value="${isCorrect ? (correctCount == null ? '' : correctCount) : (score == null ? '' : score)}">`;
+}
+
 function scoreCardHTML(s, a) {
   const hasMax = s.plan.totalScore != null;
+
+  const rows = s.modules
+    .map((m) => {
+      if (hasChildren(m)) {
+        const maxScore = moduleMaxScore(m);
+        const score = moduleScore(m);
+        return `<div class="score-group">
+          <div class="score-group-head">
+            <span class="sr-name">${esc(m.name)}<small>${m.children.length} 个二级模块${maxScore != null ? ` · 满分 ${fmtScore(maxScore)}` : ''}</small></span>
+            <span class="sg-total">${score == null ? '—' : fmtScore(score)}${maxScore != null ? `<i>/${fmtScore(maxScore)}</i>` : ''}</span>
+          </div>
+          ${m.children
+            .map((c, ci) => {
+              const per = childPerQuestionScore(c, m);
+              const cMax = childMaxScore(c, m);
+              const kind = c.questionCount != null ? 'correct' : 'score';
+              const desc = c.questionCount != null
+                ? `${c.questionCount} 题 · 每题 ${fmtScore(per)} 分`
+                : '未设题目数，直接填分';
+              return `<div class="score-row sub">
+                <span class="sr-name">${esc(c.name)}<small>${desc}${cMax != null ? ` · 满分 ${fmtScore(cMax)}` : ''}</small></span>
+                ${scoreInputCell({ modId: m.id, ci, kind, questionCount: c.questionCount, correctCount: c.correctCount, score: c.score })}
+              </div>`;
+            })
+            .join('')}
+        </div>`;
+      }
+      if (m.questionCount != null) {
+        const maxScore = moduleMaxScore(m);
+        return `<div class="score-row">
+          <span class="sr-name">${esc(m.name)}<small>${m.questionCount} 题 · 每题 ${fmtScore(perQuestionScore(m))} 分${maxScore != null ? ` · 满分 ${fmtScore(maxScore)}` : ''}</small></span>
+          ${scoreInputCell({ modId: m.id, kind: 'correct', questionCount: m.questionCount, correctCount: m.correctCount, score: null })}
+        </div>`;
+      }
+      return `<div class="score-row">
+        <span class="sr-name">${esc(m.name)}<small>${m.maxScore != null ? `满分 ${fmtScore(m.maxScore)}` : '未设满分'}</small></span>
+        ${scoreInputCell({ modId: m.id, kind: 'score', correctCount: null, score: m.score })}
+      </div>`;
+    })
+    .join('');
+
   return `<section class="card">
     <div class="card-head"><h2>得分录入</h2><span class="hint">${a.hasScores ? '可随时修改' : '选填'}</span></div>
     <div class="field-row">
@@ -593,28 +647,7 @@ function scoreCardHTML(s, a) {
         <b id="totalPreview">${a.effectiveTotal != null ? fmtScore(a.effectiveTotal) : '—'}</b>
       </div>
     </div>
-    <div class="score-list">
-      ${s.modules
-        .map((m) => {
-          const per = perQuestionScore(m);
-          if (m.questionCount != null) {
-            const maxScore = moduleMaxScore(m);
-            return `<div class="score-row">
-              <span class="sr-name">${esc(m.name)}<small>${m.questionCount} 题 · 每题 ${fmtScore(per)} 分${maxScore != null ? ` · 满分 ${fmtScore(maxScore)}` : ''}</small></span>
-              <span class="sr-unit">对</span>
-              <input data-mod="${m.id}" data-kind="correct" type="number" inputmode="numeric" min="0" step="1"
-                max="${m.questionCount}" placeholder="题数" value="${m.correctCount == null ? '' : m.correctCount}">
-            </div>`;
-          }
-          return `<div class="score-row">
-            <span class="sr-name">${esc(m.name)}<small>${m.maxScore != null ? `满分 ${fmtScore(m.maxScore)}` : '未设满分'}</small></span>
-            <span class="sr-unit">分</span>
-            <input data-mod="${m.id}" data-kind="score" type="number" inputmode="decimal" min="0" step="0.5"
-              placeholder="得分" value="${m.score == null ? '' : m.score}">
-          </div>`;
-        })
-        .join('')}
-    </div>
+    <div class="score-list">${rows}</div>
     <label class="field">
       <span>备注<em>选填</em></span>
       <textarea id="f-note" rows="2" placeholder="这场考试的感受、要改的地方…">${esc(s.note || '')}</textarea>
@@ -705,7 +738,12 @@ function tplDraftFromTemplate(t) {
           questionCount: m.questionCount,
           perQuestionScore: m.perQuestionScore,
           suggestedMinutes: m.suggestedMinutes,
-          children: (m.children || []).map((c) => ({ name: c.name, suggestedMinutes: c.suggestedMinutes })),
+          children: (m.children || []).map((c) => ({
+            name: c.name,
+            suggestedMinutes: c.suggestedMinutes,
+            questionCount: c.questionCount,
+            perQuestionScore: c.perQuestionScore,
+          })),
         }))
       : [emptyModuleDraft(0), emptyModuleDraft(1)],
     returnTo: null,
@@ -758,11 +796,11 @@ views.tplEdit = () => {
                               <input class="sub-name-in" data-i="${i}" data-ci="${ci}" type="text" placeholder="子模块名，如 图形推理" value="${esc(c.name)}">
                               <button class="mini danger" data-act="sub-remove" data-i="${i}" data-ci="${ci}" aria-label="删除子模块">×</button>
                             </div>
-                            <label class="sub-sug-line">
-                              <span>建议用时</span>
-                              <input class="sub-sug-in" data-i="${i}" data-ci="${ci}" type="number" inputmode="decimal" min="0" step="1" placeholder="选填" value="${c.suggestedMinutes == null ? '' : c.suggestedMinutes}">
-                              <span>分钟</span>
-                            </label>
+                            <div class="sub-grid">
+                              <label><span>题目数</span><input class="sub-q-in" data-i="${i}" data-ci="${ci}" type="number" inputmode="numeric" min="0" step="1" placeholder="选填" value="${c.questionCount == null ? '' : c.questionCount}"></label>
+                              <label><span>每题分</span><input class="sub-qp-in" data-i="${i}" data-ci="${ci}" type="number" inputmode="decimal" min="0" step="0.1" placeholder="${m.perQuestionScore == null ? '默认 1' : `同上级 ${fmtScore(m.perQuestionScore)}`}" value="${c.perQuestionScore == null ? '' : c.perQuestionScore}"></label>
+                              <label><span>建议(分)</span><input class="sub-sug-in" data-i="${i}" data-ci="${ci}" type="number" inputmode="decimal" min="0" step="1" placeholder="选填" value="${c.suggestedMinutes == null ? '' : c.suggestedMinutes}"></label>
+                            </div>
                           </li>`,
                         )
                         .join('')}</ul>`
@@ -815,6 +853,20 @@ function syncTplDraft() {
     const ci = Number(inp.dataset.ci);
     if (t.modules[i] && t.modules[i].children[ci]) {
       t.modules[i].children[ci].suggestedMinutes = numOrNull(inp.value);
+    }
+  });
+  $$('.sub-q-in').forEach((inp) => {
+    const i = Number(inp.dataset.i);
+    const ci = Number(inp.dataset.ci);
+    if (t.modules[i] && t.modules[i].children[ci]) {
+      t.modules[i].children[ci].questionCount = numOrNull(inp.value);
+    }
+  });
+  $$('.sub-qp-in').forEach((inp) => {
+    const i = Number(inp.dataset.i);
+    const ci = Number(inp.dataset.ci);
+    if (t.modules[i] && t.modules[i].children[ci]) {
+      t.modules[i].children[ci].perQuestionScore = numOrNull(inp.value);
     }
   });
   return t;
@@ -949,13 +1001,33 @@ function lineChart(values, labels, mode) {
   </svg>`;
 }
 
+function trendGroups(sessions) {
+  const map = new Map();
+  sessions
+    .filter((s) => s.status === 'finished')
+    .forEach((s) => {
+      const key = sessionGroupKey(s);
+      if (!map.has(key)) map.set(key, { key, label: '', sessions: [] });
+      const g = map.get(key);
+      g.sessions.push(s);
+      if (!g.label) {
+        const et = store.findExamTemplate(key);
+        g.label = et ? et.name : s.templateName || '默认模块';
+      }
+    });
+  return Array.from(map.values()).sort((a, b) => b.sessions.length - a.sessions.length);
+}
+
 views.trend = () => {
   const data = store.db();
-  const all = data.sessions
-    .filter((s) => s.status === 'finished')
+  const groups = trendGroups(data.sessions);
+  const totalCount = groups.reduce((n, g) => n + g.sessions.length, 0);
+  const selected = ui.trendGroup && ui.trendGroup !== 'all' ? groups.find((g) => g.key === ui.trendGroup) : null;
+  const source = (selected ? selected.sessions : groups.flatMap((g) => g.sessions))
+    .slice()
     .sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0));
   const mode = ui.trendMode || 'score';
-  const points = all
+  const points = source
     .map((s) => ({ s, a: analyze(s) }))
     .filter((x) => (mode === 'score' ? x.a.effectiveTotal != null : x.a.totalModuleMs > 0))
     .slice(-12);
@@ -966,6 +1038,7 @@ views.trend = () => {
   });
   const avg = values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
   const best = values.length ? Math.max(...values) : null;
+  const fmtPoint = (v) => (mode === 'score' ? fmtScore(v) : `${Math.round(v)} 分`);
 
   const body = points.length
     ? `<section class="card">
@@ -974,9 +1047,9 @@ views.trend = () => {
        <section class="card tight">
          <div class="stats">
            <div class="stat"><b>${points.length}</b><span>场次</span></div>
-           <div class="stat"><b>${avg == null ? '—' : (mode === 'score' ? fmtScore(Math.round(avg * 10) / 10) : `${Math.round(avg)} 分`)}</b><span>平均</span></div>
-           <div class="stat"><b>${best == null ? '—' : (mode === 'score' ? fmtScore(best) : `${Math.round(best)} 分`)}</b><span>最好</span></div>
-           <div class="stat"><b>${fmtScore(values[values.length - 1])}${mode === 'time' ? ' 分' : ''}</b><span>最近</span></div>
+           <div class="stat"><b>${avg == null ? '—' : fmtPoint(Math.round(avg * 10) / 10)}</b><span>平均</span></div>
+           <div class="stat"><b>${best == null ? '—' : fmtPoint(best)}</b><span>最好</span></div>
+           <div class="stat"><b>${fmtPoint(values[values.length - 1])}</b><span>最近</span></div>
          </div>
        </section>
        <ul class="hist-list">
@@ -992,7 +1065,7 @@ views.trend = () => {
                    <small>${fmtDateTime(x.s.startedAt)}</small>
                  </span>
                  <span class="hist-side">
-                   <b>${mode === 'score' ? fmtScore(x.a.effectiveTotal) : `${Math.round(x.a.totalModuleMs / 60000)} 分`}</b>
+                   <b>${fmtPoint(mode === 'score' ? x.a.effectiveTotal : x.a.totalModuleMs / 60000)}</b>
                    <small>${mode === 'score' ? (x.a.totalScoreMax ? `满分 ${fmtScore(x.a.totalScoreMax)}` : '得分') : '总用时'}</small>
                  </span>
                </button>
@@ -1000,15 +1073,27 @@ views.trend = () => {
            )
            .join('')}
        </ul>`
-    : `<p class="empty">${mode === 'score' ? '还没有录过分数的考试。' : '还没有完成的考试。'}</p>`;
+    : `<p class="empty">${
+        mode === 'score'
+          ? (selected ? `「${esc(selected.label)}」还没有录过分数的考试。` : '还没有录过分数的考试。')
+          : (selected ? `「${esc(selected.label)}」还没有完成的考试。` : '还没有完成的考试。')
+      }</p>`;
 
   return `<main class="page sub">
     ${pageHead('趋势')}
+    <div class="chips">
+      <button class="chip${selected ? '' : ' on'}" data-act="trend-group" data-key="all">全部<i>· ${totalCount}</i></button>
+      ${groups
+        .map(
+          (g) => `<button class="chip${selected && selected.key === g.key ? ' on' : ''}" data-act="trend-group" data-key="${esc(g.key)}">${esc(g.label)}<i>· ${g.sessions.length}</i></button>`,
+        )
+        .join('')}
+    </div>
     <div class="seg">
       <button class="seg-btn${mode === 'score' ? ' on' : ''}" data-act="trend-mode" data-mode="score">成绩</button>
       <button class="seg-btn${mode === 'time' ? ' on' : ''}" data-act="trend-mode" data-mode="time">用时</button>
     </div>
-    <p class="hint">最多显示最近 12 场。成绩趋势只统计录过分数的考试。</p>
+    <p class="hint">${selected ? `只看「${esc(selected.label)}」` : '全部考试混在一起时对比较弱，建议选择一场具体考试'}，最多显示最近 12 场。</p>
     ${body}
   </main>`;
 };
@@ -1020,32 +1105,118 @@ views.history = () => {
   const list = data.sessions
     .filter((s) => s.status === 'finished')
     .sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
+  const manage = !!ui.manage;
+  const headRight = manage
+    ? '<button class="text-btn" data-act="manage-off">完成</button>'
+    : '<button class="text-btn" data-act="go" data-view="trend">趋势</button><button class="text-btn" data-act="manage-on">管理</button>';
+
+  const manageCard = manage
+    ? `<section class="card tight">
+         <button class="btn ghost small" data-act="go-purge">按考试模版删除…</button>
+         <button class="btn danger-ghost" data-act="purge-all">删除全部记录（${list.length}）</button>
+         <p class="hint">删除后无法恢复，建议先在首页「导出备份」。</p>
+       </section>`
+    : '';
+
+  const rows = list
+    .map((s) => {
+      const a = analyze(s);
+      const side = manage
+        ? `<button class="text-btn danger" data-act="del-session" data-id="${s.id}">删除</button>`
+        : `<span class="hist-side">
+             <b>${a.effectiveTotal != null ? fmtScore(a.effectiveTotal) + (s.plan.totalScore ? `<i>/${fmtScore(s.plan.totalScore)}</i>` : '') : fmtMS(sumModuleMs(s))}</b>
+             <small>${a.effectiveTotal != null ? '得分' : '用时'}</small>
+           </span>`;
+      const inner = `<span class="hist-main">
+          <b>${esc(s.name || '模拟考试')}</b>
+          <small>${fmtDateTime(s.startedAt)} · ${esc(s.templateName || '')}${s.finishReason === 'timeup' ? ' · 时间到' : ''}</small>
+        </span>${side}`;
+      return `<li>${manage
+        ? `<div class="hist-item">${inner}</div>`
+        : `<button class="hist-item" data-act="open-session" data-id="${s.id}">${inner}</button>`}</li>`;
+    })
+    .join('');
+
   return `<main class="page sub">
-    ${pageHead('考试记录', { right: '<button class="text-btn" data-act="go" data-view="trend">趋势</button>' })}
-    ${list.length === 0
-      ? '<p class="empty">还没有完成过模拟考试。开始一场试试？</p>'
-      : `<ul class="hist-list">
-          ${list
-            .map((s) => {
-              const a = analyze(s);
-              return `<li>
-                <button class="hist-item" data-act="open-session" data-id="${s.id}">
-                  <span class="hist-main">
-                    <b>${esc(s.name || '模拟考试')}</b>
-                    <small>${fmtDateTime(s.startedAt)} · ${esc(s.templateName || '')}${s.finishReason === 'timeup' ? ' · 时间到' : ''}</small>
-                  </span>
-                  <span class="hist-side">
-                    <b>${a.effectiveTotal != null ? fmtScore(a.effectiveTotal) + (s.plan.totalScore ? `<i>/${fmtScore(s.plan.totalScore)}</i>` : '') : fmtMS(sumModuleMs(s))}</b>
-                    <small>${a.effectiveTotal != null ? '得分' : '用时'}</small>
-                  </span>
-                </button>
-              </li>`;
-            })
+    ${pageHead('考试记录', { right: headRight })}
+    ${manageCard}
+    ${list.length === 0 ? '<p class="empty">还没有完成过模拟考试。开始一场试试？</p>' : `<ul class="hist-list">${rows}</ul>`}
+    ${navHTML('history')}
+  </main>`;
+};
+
+views.purge = () => {
+  const groups = trendGroups(store.db().sessions);
+  return `<main class="page sub">
+    ${pageHead('按考试模版删除')}
+    <p class="page-desc">只会删除所选分组的考试记录，模版和其他记录不受影响。</p>
+    ${groups.length === 0
+      ? '<p class="empty">没有可删除的记录。</p>'
+      : `<ul class="tpl-list">
+          ${groups
+            .map(
+              (g) => `<li class="tpl-item">
+                <div class="tpl-main">
+                  <b>${esc(g.label)}</b>
+                  <small>${g.sessions.length} 条 · 最近 ${fmtDateTime(Math.max(...g.sessions.map((s) => s.startedAt || 0)))}</small>
+                </div>
+                <button class="text-btn danger" data-act="purge-group" data-key="${esc(g.key)}" data-label="${esc(g.label)}">删除</button>
+              </li>`,
+            )
             .join('')}
         </ul>`}
     ${navHTML('history')}
   </main>`;
 };
+
+/* ------------------------------------------------------------- 删除 */
+
+function deleteSession(id) {
+  const s = sessionOf(id);
+  if (!s) return;
+  const when = fmtDateTime(s.startedAt);
+  const name = s.name || '模拟考试';
+  if (!window.confirm(`删除这条记录？\n\n${name}（${when}）\n\n删除后无法恢复，建议先在首页「导出备份」。`)) return;
+  store.removeSession(id);
+  toast('记录已删除');
+  if (ui.view === 'result') {
+    ui.view = 'history';
+    ui.params = {};
+  }
+  render();
+}
+
+function purgeGroup(key, label) {
+  const data = store.db();
+  const targets = data.sessions.filter((s) => s.status === 'finished' && sessionGroupKey(s) === key);
+  if (!targets.length) {
+    toast('这个分组已经没有记录了');
+    return;
+  }
+  if (!window.confirm(`将删除「${label}」的 ${targets.length} 条考试记录。\n\n删除后无法恢复，确定吗？`)) return;
+  data.sessions = data.sessions.filter((s) => !(s.status === 'finished' && sessionGroupKey(s) === key));
+  store.save();
+  ui.view = 'history';
+  ui.manage = true;
+  render();
+  toast(`已删除 ${targets.length} 条记录`);
+}
+
+function purgeAll() {
+  const data = store.db();
+  const n = data.sessions.filter((s) => s.status === 'finished').length;
+  if (!n) {
+    toast('没有可删除的记录');
+    return;
+  }
+  if (!window.confirm(`将删除全部 ${n} 条考试记录，且无法恢复。\n\n模版会保留，只需要的话可以重新开考。确定继续？`)) return;
+  if (!window.confirm(`再确认一次：${n} 条记录会被永久删除（建议先导出备份）。`)) return;
+  data.sessions = data.sessions.filter((s) => s.status !== 'finished');
+  store.save();
+  ui.manage = false;
+  render();
+  toast('全部记录已删除');
+}
 
 /* --------------------------------------------------------------- 渲染 */
 
@@ -1256,7 +1427,12 @@ function startExam() {
         questionCount: m.questionCount,
         perQuestionScore: m.perQuestionScore,
         suggestedMinutes: m.suggestedMinutes,
-        children: (m.children || []).map((c) => ({ name: c.name, suggestedMinutes: c.suggestedMinutes })),
+        children: (m.children || []).map((c) => ({
+          name: c.name,
+          questionCount: c.questionCount,
+          perQuestionScore: c.perQuestionScore,
+          suggestedMinutes: c.suggestedMinutes,
+        })),
       }))
     : defaultModules(d.moduleCount).map((m) => ({
         name: m.name, maxScore: null, questionCount: null, perQuestionScore: null, suggestedMinutes: null, children: [],
@@ -1295,6 +1471,10 @@ function startExam() {
       children: (m.children || []).map((c) => ({
         id: uid('ss'),
         name: c.name,
+        questionCount: numOrNull(c.questionCount),
+        perQuestionScore: numOrNull(c.perQuestionScore),
+        correctCount: null,
+        score: null,
         suggestedMinutes: numOrNull(c.suggestedMinutes),
         startedAt: null,
         endedAt: null,
@@ -1420,8 +1600,23 @@ function abandonExam() {
 function readScoreInputs(s) {
   const values = {};
   s.modules.forEach((m) => {
-    const input = $(`input[data-mod="${m.id}"]`);
-    values[m.id] = input ? numOrNull(input.value) : null;
+    if (hasChildren(m)) {
+      values[m.id] = {
+        children: m.children.map((c, ci) => {
+          const el = $(`input[data-mod="${m.id}"][data-ci="${ci}"]`);
+          return {
+            kind: c.questionCount != null ? 'correct' : 'score',
+            value: el ? numOrNull(el.value) : null,
+          };
+        }),
+      };
+    } else {
+      const el = $(`input[data-mod="${m.id}"]`);
+      values[m.id] = {
+        kind: m.questionCount != null ? 'correct' : 'score',
+        value: el ? numOrNull(el.value) : null,
+      };
+    }
   });
   const totalEl = $('#f-total-score');
   return { values, total: totalEl ? numOrNull(totalEl.value) : null };
@@ -1429,17 +1624,56 @@ function readScoreInputs(s) {
 
 function applyScores(s, raw) {
   s.modules.forEach((m) => {
-    const v = raw.values[m.id];
-    if (m.questionCount != null) {
-      m.correctCount = v;
-      m.score = v == null ? null : v * perQuestionScore(m);
+    const r = raw.values[m.id];
+    if (!r) return;
+    if (hasChildren(m)) {
+      m.children.forEach((c, ci) => {
+        const item = r.children && r.children[ci];
+        if (!item) return;
+        if (item.kind === 'correct') {
+          c.correctCount = item.value;
+          c.score = null;
+        } else {
+          c.score = item.value;
+          c.correctCount = null;
+        }
+      });
+      m.score = null;
+      m.correctCount = null;
+    } else if (r.kind === 'correct') {
+      m.correctCount = r.value;
+      m.score = null;
     } else {
-      m.score = v;
+      m.score = r.value;
+      m.correctCount = null;
     }
   });
   // 手填总分优先；清空则回到「各模块合计」
   s.totalScore = raw.total;
   s.scoresFilled = s.totalScore != null || s.modules.some((m) => moduleScore(m) != null);
+}
+
+function scoreDraftModules(s, raw) {
+  return s.modules.map((m) => {
+    const r = raw.values[m.id];
+    if (!r) return m;
+    if (hasChildren(m)) {
+      return {
+        ...m,
+        score: null,
+        correctCount: null,
+        children: m.children.map((c, ci) => {
+          const item = (r.children && r.children[ci]) || { kind: c.questionCount != null ? 'correct' : 'score', value: null };
+          return item.kind === 'correct'
+            ? { ...c, correctCount: item.value, score: null }
+            : { ...c, score: item.value, correctCount: null };
+        }),
+      };
+    }
+    return r.kind === 'correct'
+      ? { ...m, correctCount: r.value, score: null }
+      : { ...m, score: r.value, correctCount: null };
+  });
 }
 
 function liveScorePreview() {
@@ -1448,12 +1682,7 @@ function liveScorePreview() {
   const raw = readScoreInputs(s);
   const clone = {
     ...s,
-    modules: s.modules.map((m) => {
-      const v = raw.values[m.id];
-      return m.questionCount != null
-        ? { ...m, correctCount: v, score: v == null ? null : v * perQuestionScore(m) }
-        : { ...m, score: v };
-    }),
+    modules: scoreDraftModules(s, raw),
     totalScore: raw.total,
   };
   const preview = $('#totalPreview');
@@ -1491,7 +1720,12 @@ function saveTemplate() {
       perQuestionScore: numOrNull(m.perQuestionScore),
       suggestedMinutes: numOrNull(m.suggestedMinutes),
       children: (m.children || [])
-        .map((c) => ({ name: String(c.name || '').trim(), suggestedMinutes: numOrNull(c.suggestedMinutes) }))
+        .map((c) => ({
+          name: String(c.name || '').trim(),
+          suggestedMinutes: numOrNull(c.suggestedMinutes),
+          questionCount: numOrNull(c.questionCount),
+          perQuestionScore: numOrNull(c.perQuestionScore),
+        }))
         .filter((c) => c.name),
     }))
     .filter((m) => m.name);
@@ -1602,6 +1836,8 @@ function onAct(act, el) {
         ui.tplKind = 'exams';
       } else if (ui.view === 'trend') {
         ui.view = 'history';
+      } else if (ui.view === 'purge') {
+        ui.view = 'history';
       } else {
         ui.view = 'home';
       }
@@ -1675,6 +1911,32 @@ function onAct(act, el) {
     case 'trend-mode':
       ui.trendMode = el.dataset.mode || 'score';
       render();
+      break;
+    case 'trend-group':
+      ui.trendGroup = el.dataset.key || 'all';
+      render();
+      break;
+    case 'manage-on':
+      ui.manage = true;
+      render();
+      break;
+    case 'manage-off':
+      ui.manage = false;
+      render();
+      break;
+    case 'del-session':
+      deleteSession(el.dataset.id);
+      break;
+    case 'go-purge':
+      ui.view = 'purge';
+      ui.params = {};
+      render();
+      break;
+    case 'purge-group':
+      purgeGroup(el.dataset.key, el.dataset.label || '该分组');
+      break;
+    case 'purge-all':
+      purgeAll();
       break;
     case 'tpl-seg':
       ui.tplKind = el.dataset.kind;
@@ -1761,7 +2023,7 @@ function onAct(act, el) {
       syncTplDraft();
       const i = Number(el.dataset.i);
       if (ui.tpl.modules[i] && ui.tpl.modules[i].children.length < 12) {
-        ui.tpl.modules[i].children.push({ name: '', suggestedMinutes: null });
+        ui.tpl.modules[i].children.push({ name: '', suggestedMinutes: null, questionCount: null, perQuestionScore: null });
       }
       render();
       break;
@@ -1806,12 +2068,7 @@ function sessionMenu(id) {
   if (!s) return;
   const choice = window.prompt('输入数字：1 删除这条记录　2 复制分析文本', '1');
   if (choice === '1') {
-    if (window.confirm('删除这条考试记录？无法恢复。')) {
-      store.removeSession(id);
-      ui.view = 'history';
-      render();
-      toast('记录已删除');
-    }
+    deleteSession(id);
   } else if (choice === '2') {
     copyReport(id);
   }

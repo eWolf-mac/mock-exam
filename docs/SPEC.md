@@ -68,7 +68,13 @@ v2 相对 v1 的变化：
           "perQuestionScore": 0.8,   // 每题分值（可选，缺省 1）
           "suggestedMinutes": 35,    // 建议用时（分钟，可选）
           "children": [              // 二级模块（可空）
-            { "id": "tsub_1", "name": "图形推理", "suggestedMinutes": 10 }
+            {
+              "id": "tsub_1",
+              "name": "图形推理",
+              "suggestedMinutes": 10,
+              "questionCount": 10,     // 可选
+              "perQuestionScore": null // null = 继承一级模块的每题分
+            }
           ]
         }
       ],
@@ -116,6 +122,8 @@ v2 相对 v1 的变化：
           "children": [
             {
               "id": "ss_1", "name": "图形推理", "suggestedMinutes": 10,
+              "questionCount": 10, "perQuestionScore": null,
+              "correctCount": 7, "score": null,
               "startedAt": 0, "endedAt": 0, "elapsedMs": 612000
             }
           ]
@@ -173,17 +181,25 @@ v2 相对 v1 的变化：
 
 ### 3.7 趋势
 记录页右上角进入，最多 12 场：
+- 顶部**按考试分组**（chip）：`全部` 或 `考试模版名 + 场次`，分组键 = `examTemplateId || templateId || '__default__'`；
 - **成绩**：只统计有统计总分的考试，折线 + 数值标签；
 - **用时**：统计实际完成总用时（分钟）；
 - 下方给出场次 / 平均 / 最好 / 最近，以及最近 8 场的列表。
 
 ### 3.5 模版
 「模块模版 / 考试模版」分段切换。
-- 模块模版编辑器：每个模块一张卡 —— 名称、建议用时、题目数、每题分值、满分（选填）、二级模块列表（名称 + 建议用时）、上移/下移/删除。
+- 模块模版编辑器：每个模块一张卡 —— 名称、建议用时、题目数、每题分值、满分（选填）、二级模块列表
+  （名称、题目数、每题分值、建议用时）、上移/下移/删除。
+  二级模块的「每题分值」留空表示**继承一级模块**，填了以自己为准。
 - 考试模版编辑器：名称、默认开始/结束时间、默认模块模版或模块数量、默认总分。
 
-### 3.6 记录
+### 3.6 记录与删除
 倒序卡片：名称、时间、模版、状态；右侧显示得分（有分）或总用时；点开看分析。
+右上角「管理」进入管理模式：
+- 逐条删除（每条右侧「删除」）；
+- **按考试模版删除**：单独页面，按分组列出「模版名 + 条数 + 最近时间」，逐组删除；
+- **删除全部记录**：二次确认；
+- 三种删除都会先弹确认框，并提示「无法恢复、建议先导出备份」。
 
 ---
 
@@ -191,8 +207,12 @@ v2 相对 v1 的变化：
 
 ```
 模块每题分  = perQuestionScore ?? 1
-模块满分    = maxScore ?? (questionCount ? questionCount × 每题分 : null)
-模块得分    = score ?? (correctCount != null && questionCount != null ? correctCount × 每题分 : null)
+二级每题分  = 二级.perQuestionScore ?? 一级.perQuestionScore ?? 1
+模块满分    = 有二级模块 ? Σ二级满分 : (maxScore ?? (questionCount ? questionCount × 模块每题分 : null))
+二级满分    = 二级.maxScore ?? (二级.questionCount ? 二级.questionCount × 二级每题分 : null)
+模块得分    = 有二级模块 ? Σ二级得分（全部录完才算，否则 null）
+            : (score ?? (correctCount != null && questionCount != null ? correctCount × 模块每题分 : null))
+二级得分    = 二级.score ?? (二级.correctCount != null && 二级.questionCount != null ? 二级.correctCount × 二级每题分 : null)
 统计总分    = totalScore（手填） ?? Σ模块得分（仅当所有模块都有得分时才算）
 得分率      = 统计总分 / plan.totalScore（两者都有值才算）
 ```
