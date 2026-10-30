@@ -9,7 +9,7 @@ import {
   fmtPerQuestion,
   allSteps, currentStep, completeCurrentStep, undoLastStep, closeCurrentStep,
   isModuleDone, moduleScore, moduleMaxScore, moduleSuggestedMs, stepSuggestedMs,
-  childPerQuestionScore, childScoreValue, childMaxScore, sessionGroupKey,
+  childPerQuestionScore, childScoreValue, childMaxScore, sessionGroupKey, questionModules,
 } from '../web/js/core.js';
 
 let passed = 0;
@@ -381,7 +381,8 @@ console.log('文本报告与工具');
 
 test('reportText 含关键信息（含子模块）', () => {
   const s = makeChildSession();
-  s.modules[0].correctCount = 30;
+  s.modules[0].children[0].score = 10;
+  s.modules[0].children[1].score = 14;
   s.modules[1].correctCount = 18;
   s.status = 'finished';
   s.finishedAt = s.startedAt + 90 * MIN;
@@ -401,8 +402,45 @@ test('pct / fmtScore / defaultModules v2 字段', () => {
   assert.equal(mods.length, 3);
   assert.equal(mods[0].name, '模块一');
   assert.deepEqual(mods[0].children, []);
-  assert.equal(defaultModules(1).length, 2);
-  assert.equal(defaultModules(99).length, 8);
+  assert.equal(defaultModules(1).length, 1);
+  assert.equal(defaultModules(30).length, 30);
+  assert.equal(defaultModules(999).length, 99, '模块数上限 99');
+});
+
+test('逐题模式：questionModules 生成 第N题', () => {
+  const qs = questionModules(30);
+  assert.equal(qs.length, 30);
+  assert.equal(qs[0].name, '第1题');
+  assert.equal(qs[29].name, '第30题');
+  assert.equal(qs[0].questionCount, 1);
+  assert.equal(qs[0].perQuestionScore, 1);
+  assert.deepEqual(qs[0].children, []);
+  assert.equal(questionModules(0).length, 20, '非法值回落到 20');
+  assert.equal(questionModules(999).length, 200, '题目数上限 200');
+});
+
+test('逐题模式：analyze 给出平均、最慢、最快', () => {
+  const t0 = 1700000000000;
+  const s = {
+    id: 'q1',
+    mode: 'questions',
+    plan: { startVirtual: 9 * H, endVirtual: 11 * H, durationMs: 2 * H, totalScore: null },
+    modules: [
+      { id: 'q1', name: '第1题', questionCount: 1, perQuestionScore: 1, correctCount: null, score: null, children: [], startedAt: t0, endedAt: t0 + 30000, elapsedMs: 30000 },
+      { id: 'q2', name: '第2题', questionCount: 1, perQuestionScore: 1, correctCount: null, score: null, children: [], startedAt: t0 + 30000, endedAt: t0 + 150000, elapsedMs: 120000 },
+    ],
+    status: 'finished',
+    startedAt: t0,
+    finishedAt: t0 + 150000,
+    finishReason: 'manual',
+    totalScore: null,
+  };
+  const a = analyze(s);
+  assert.equal(a.mode, 'questions');
+  assert.equal(a.avgModuleMs, 75000);
+  assert.equal(a.slowest.name, '第2题');
+  assert.equal(a.fastest.name, '第1题');
+  assert.ok(a.insights.some((t) => t.includes('每题平均')));
 });
 
 console.log(`\n通过 ${passed} 项`);

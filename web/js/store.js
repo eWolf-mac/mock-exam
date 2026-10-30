@@ -112,6 +112,7 @@ function normSession(s, fallback) {
     },
     modules: Array.isArray(s.modules) ? s.modules.map(normSessionModule) : [],
     status: ['running', 'finished', 'discarded'].includes(s.status) ? s.status : 'finished',
+    mode: s.mode === 'questions' ? 'questions' : 'modules',
     startedAt: numOrNull(s.startedAt),
     finishedAt: numOrNull(s.finishedAt),
     finishReason: s.finishReason || null,
@@ -147,7 +148,8 @@ function normalize(raw) {
   const ls = data.settings.lastSetup;
   ls.startVirtual = numOrNull(ls.startVirtual) ?? base.settings.lastSetup.startVirtual;
   ls.endVirtual = numOrNull(ls.endVirtual) ?? base.settings.lastSetup.endVirtual;
-  ls.moduleCount = Math.min(8, Math.max(2, numOrNull(ls.moduleCount) || 4));
+  ls.moduleCount = Math.min(99, Math.max(1, numOrNull(ls.moduleCount) || 4));
+  ls.mode = ls.mode === 'questions' ? 'questions' : 'modules';
   ls.totalScore = numOrNull(ls.totalScore);
   if (ls.templateId && !data.templates.some((t) => t.id === ls.templateId)) ls.templateId = null;
   if (ls.examTemplateId && !data.examTemplates.some((e) => e.id === ls.examTemplateId)) ls.examTemplateId = null;

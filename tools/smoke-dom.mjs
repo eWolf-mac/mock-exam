@@ -301,6 +301,35 @@ ok('单条删除', () => {
   click('manage-off');
 });
 
+console.log('逐题模式');
+
+ok('按题创建 30 题考试', () => {
+  click('new-exam');
+  click('exam-mode', { mode: 'questions' });
+  node('#f-qcount').value = '30';
+  click('start-exam');
+  const s = lastSession();
+  assert.equal(s.mode, 'questions');
+  assert.equal(s.modules.length, 30);
+  assert.equal(s.modules[0].name, '第1题');
+  assert.equal(s.modules[29].name, '第30题');
+  assert.equal(s.modules[0].questionCount, 1);
+  assert.ok(html().includes('答题卡'), '题多时切换成答题卡');
+  assert.ok(html().includes('/ 30'));
+});
+
+ok('逐题完成两题后交卷', () => {
+  click('complete');
+  click('complete');
+  click('submit');
+  const s = lastSession();
+  assert.equal(s.status, 'finished');
+  assert.ok(s.modules.filter((m) => m.endedAt != null).length >= 3);
+  assert.ok(html().includes('每题用时'));
+  assert.ok(html().includes('平均每题'));
+  assert.ok(html().includes('最慢 5 题'));
+});
+
 console.log('旧数据升级');
 
 ok('v1 数据自动升级到当前版本', () => {

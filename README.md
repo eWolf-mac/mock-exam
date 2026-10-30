@@ -38,6 +38,13 @@
 11. **二级模块也能设题目数与每题分**：每题分留空就继承一级模块（可单独覆盖）；
 12. **二级模块单独录分**：有二级模块时，录入拆到每个二级模块（正确题数或得分），一级模块显示合计与满分。
 
+**v2.3**
+
+13. **模块数可直接输入**：不再是加减到 8 个，改成数字输入（1–99），加减按钮保留；
+14. **按题计时（逐题模式）**：新建考试时切到「按题计时」，输入题目数 → 自动生成 `第1题…第N题`，
+    每题单独计时，考试总用时 = 各题之和；题多时模块列表变成**答题卡网格**；
+15. **逐题分析**：平均每题用时、每题用时柱状图（带平均线、最慢题高亮）、最慢 / 最快 5 题。
+
 ---
 
 ## 1. 立刻用起来（Web / PWA）
@@ -64,8 +71,8 @@ node tools/serve.mjs 8123        # 启动本地静态服务（默认目录 web/�
 ### 常用命令
 
 ```bash
-node tools/test-core.mjs     # 纯逻辑单元测试（23 项：时间、二级模块、计分、建议用时、分组）
-node tools/smoke-dom.mjs     # 端到端流程测试（19 项，DOM 桩驱动真实 app.js）
+node tools/test-core.mjs     # 纯逻辑单元测试（26 项：时间、二级模块、计分、建议用时、分组、逐题）
+node tools/smoke-dom.mjs     # 端到端流程测试（21 项，DOM 桩驱动真实 app.js）
 node tools/shots.mjs         # 重新出图（需 headless Chrome @9222）
 node tools/make-icons.py     # 重新生成图标（需要 Pillow）
 ```
@@ -125,6 +132,8 @@ node tools/make-icons.py     # 重新生成图标（需要 Pillow）
 结果分析、得分录入（含二级模块）、模版编辑、记录管理、长图导出见
 `docs/shots/15-dark-result.png`、`08-result-score.png`、`11-template-editor.png`、
 `22-history-manage.png`、`23-purge.png`、`21-long-image.png`。
+
+逐题模式（按题计时）见 `25-new-exam-questions.png`、`26-exam-scantron.png`、`28-result-questions.png`。
 
 ---
 

@@ -413,14 +413,31 @@ export function defaultData() {
   };
 }
 
+export const MAX_MODULES = 99;
+export const MAX_QUESTIONS = 200;
+
 export function defaultModules(count) {
-  const n = clamp(Math.round(count) || 4, 2, 8);
+  const n = clamp(Math.round(Number(count)) || 4, 1, MAX_MODULES);
   return Array.from({ length: n }, (_, i) => ({
     id: uid('um'),
-    name: `模块${cnNum(i + 1)}`,
+    name: `模块${i + 1 <= 10 ? cnNum(i + 1) : i + 1}`,
     maxScore: null,
     questionCount: null,
     perQuestionScore: null,
+    suggestedMinutes: null,
+    children: [],
+  }));
+}
+
+/** 逐题模式：每道题生成一个模块 */
+export function questionModules(count) {
+  const n = clamp(Math.round(Number(count)) || 20, 1, MAX_QUESTIONS);
+  return Array.from({ length: n }, (_, i) => ({
+    id: uid('um'),
+    name: `第${i + 1}题`,
+    maxScore: null,
+    questionCount: 1,
+    perQuestionScore: 1,
     suggestedMinutes: null,
     children: [],
   }));
@@ -599,8 +616,24 @@ export function analyze(session) {
     );
   }
 
+  const mode = session && session.mode === 'questions' ? 'questions' : 'modules';
+  const avgModuleMs = mods.length ? totalModuleMs / mods.length : null;
+  const timed = rows.filter((r) => r.ms > 0).sort((a, b) => b.ms - a.ms);
+  const slowest = timed.length ? { name: timed[0].name, ms: timed[0].ms, index: rows.indexOf(timed[0]) } : null;
+  const fastest = timed.length ? { name: timed[timed.length - 1].name, ms: timed[timed.length - 1].ms, index: rows.indexOf(timed[timed.length - 1]) } : null;
+
+  if (mode === 'questions' && timed.length >= 2) {
+    insights.push(
+      `每题平均 ${fmtMS(avgModuleMs)}；最慢「${slowest.name}」${fmtMS(slowest.ms)}，最快「${fastest.name}」${fmtMS(fastest.ms)}，相差 ${fmtMS(slowest.ms - fastest.ms)}。`,
+    );
+  }
+
   return {
     rows,
+    mode,
+    avgModuleMs,
+    slowest,
+    fastest,
     examDurationMs,
     wallMs,
     totalModuleMs,

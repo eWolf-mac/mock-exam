@@ -1,5 +1,5 @@
 /* Service Worker：离线缓存（首次联网访问后即可完全离线使用） */
-const CACHE = 'mock-exam-v4';
+const CACHE = 'mock-exam-v5';
 
 const PRECACHE = [
   './',

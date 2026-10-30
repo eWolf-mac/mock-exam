@@ -413,6 +413,54 @@ await click('[data-act="resume"]');
 await sleep(1000);
 await shot('18-exam-landscape');
 
+/* -------------------------------------------------- 逐题模式 */
+
+await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] });
+await evaluate('localStorage.clear()');
+await load();
+await click('[data-act="new-exam"]');
+await click('[data-act="exam-mode"][data-mode="questions"]');
+await evaluate(`(() => { const el = document.querySelector('#f-qcount'); el.value = '30'; el.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+await sleep(200);
+await shot('25-new-exam-questions');
+
+await click('[data-act="start-exam"]');
+await sleep(1200);
+await shot('26-exam-scantron');
+
+await evaluate('window.confirm = () => true');
+await click('[data-act="complete"]');
+await click('[data-act="complete"]');
+await sleep(400);
+await shot('27-exam-scantron-progress');
+await click('[data-act="submit"]');
+
+// 用真实感的每题用时替换（秒）
+await evaluate(`(() => {
+  const key = 'mock-exam:v1';
+  const d = JSON.parse(localStorage.getItem(key));
+  const s = d.sessions[d.sessions.length - 1];
+  const times = [42, 95, 18, 130, 25, 60, 15, 88, 47, 33, 120, 22, 70, 55, 38, 92, 12, 64, 29, 105, 44, 20, 58, 36, 81, 26, 49, 73, 31, 56];
+  let c = Date.now() - 30 * 60000;
+  s.startedAt = c;
+  s.modules.forEach((m, i) => {
+    const ms = times[i] * 1000;
+    m.startedAt = c;
+    m.endedAt = c + ms;
+    m.elapsedMs = ms;
+    c += ms;
+  });
+  s.finishedAt = c;
+  localStorage.setItem(key, JSON.stringify(d));
+})()`);
+await load();
+await click('[data-act="open-session"]');
+await sleep(400);
+await shot('28-result-questions');
+await evaluate('window.scrollTo(0, 620)');
+await shot('29-result-questions-detail');
+
 /* -------------------------------------------------- 长图（走下载路径） */
 
 await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });

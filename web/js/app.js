@@ -4,7 +4,7 @@
 import {
   fmtHMS, fmtMS, fmtHuman, fmtMinutes, msToHM, msToHMS, fmtScore, fmtPerQuestion, pct, esc, uid, clamp, cnNum,
   parseHM, durationFor, numOrNull, virtualNow, remainingMs, elapsedWall, analyze, reportText,
-  defaultModules, MODULE_COLORS, allSteps, currentStep, completeCurrentStep, undoLastStep,
+  defaultModules, questionModules, MODULE_COLORS, allSteps, currentStep, completeCurrentStep, undoLastStep,
   closeCurrentStep, isModuleDone, hasChildren, moduleScore, moduleMaxScore, moduleSuggestedMs,
   stepSuggestedMs, perQuestionScore, childPerQuestionScore, childMaxScore, childScoreValue,
   sessionGroupKey,
@@ -188,7 +188,9 @@ function newExamDraft() {
     start: msToHM(s.startVirtual),
     end: msToHM(s.endVirtual),
     templateId: s.templateId || null,
-    moduleCount: clamp(Number(s.moduleCount) || 4, 2, 8),
+    moduleCount: clamp(Number(s.moduleCount) || 4, 1, 99),
+    questionCount: clamp(Number(s.questionCount) || 20, 1, 200),
+    mode: s.mode === 'questions' ? 'questions' : 'modules',
     totalScore: s.totalScore == null ? '' : String(s.totalScore),
     examTemplateId: null,
   };
@@ -259,25 +261,42 @@ views.newExam = () => {
     </section>
 
     <section class="card">
-      <div class="card-head"><h2>模块模版</h2><button class="text-btn" data-act="tpl-new">+ 新建模版</button></div>
-      <div class="radio-list">
-        ${choices
-          .map(
-            (c) => `<button class="radio-row${(c.id || '') === (d.templateId || '') ? ' on' : ''}" data-act="pick-template" data-id="${c.id}">
-              <span class="radio-dot"></span>
-              <span class="radio-body"><b>${esc(c.title)}</b><small>${esc(c.sub)}</small></span>
-            </button>`,
-          )
-          .join('')}
+      <div class="card-head"><h2>考试结构</h2>${d.mode === 'questions' ? '' : '<button class="text-btn" data-act="tpl-new">+ 新建模版</button>'}</div>
+      <div class="seg">
+        <button class="seg-btn${d.mode !== 'questions' ? ' on' : ''}" data-act="exam-mode" data-mode="modules">按模块</button>
+        <button class="seg-btn${d.mode === 'questions' ? ' on' : ''}" data-act="exam-mode" data-mode="questions">按题计时</button>
       </div>
-      ${d.templateId ? '' : `<div class="stepper">
-          <span>模块数量</span>
-          <div>
-            <button class="step-btn" data-act="mod-count" data-delta="-1" ${d.moduleCount <= 2 ? 'disabled' : ''}>−</button>
-            <b>${d.moduleCount}</b>
-            <button class="step-btn" data-act="mod-count" data-delta="1" ${d.moduleCount >= 8 ? 'disabled' : ''}>+</button>
-          </div>
-        </div>`}
+
+      ${
+        d.mode === 'questions'
+          ? `<label class="field">
+              <span>题目数量<em>每道题单独计时</em></span>
+              <div class="num-row">
+                <button class="step-btn" data-act="q-count" data-delta="-1">−</button>
+                <input id="f-qcount" type="number" inputmode="numeric" min="1" max="200" step="1" value="${d.questionCount}">
+                <button class="step-btn" data-act="q-count" data-delta="1">+</button>
+              </div>
+            </label>
+            <p class="hint">会按题目数量生成「第 1 题 … 第 N 题」，每题单独计时；交卷后可以看每题用时与平均用时。</p>`
+          : `<div class="radio-list">
+              ${choices
+                .map(
+                  (c) => `<button class="radio-row${(c.id || '') === (d.templateId || '') ? ' on' : ''}" data-act="pick-template" data-id="${c.id}">
+                    <span class="radio-dot"></span>
+                    <span class="radio-body"><b>${esc(c.title)}</b><small>${esc(c.sub)}</small></span>
+                  </button>`,
+                )
+                .join('')}
+            </div>
+            ${d.templateId ? '' : `<label class="field">
+              <span>模块数量<em>可直接输入</em></span>
+              <div class="num-row">
+                <button class="step-btn" data-act="mod-count" data-delta="-1">−</button>
+                <input id="f-modcount" type="number" inputmode="numeric" min="1" max="99" step="1" value="${d.moduleCount}">
+                <button class="step-btn" data-act="mod-count" data-delta="1">+</button>
+              </div>
+            </label>`}`
+      }
     </section>
 
     <section class="card">
@@ -299,10 +318,14 @@ function syncExamDraft() {
   const start = $('#f-start');
   const end = $('#f-end');
   const total = $('#f-total');
+  const modCount = $('#f-modcount');
+  const qCount = $('#f-qcount');
   if (name) d.name = name.value;
   if (start && parseHM(start.value) != null) d.start = start.value;
   if (end && parseHM(end.value) != null) d.end = end.value;
   if (total) d.totalScore = total.value;
+  if (modCount && numOrNull(modCount.value) != null) d.moduleCount = clamp(Math.round(numOrNull(modCount.value)), 1, 99);
+  if (qCount && numOrNull(qCount.value) != null) d.questionCount = clamp(Math.round(numOrNull(qCount.value)), 1, 200);
   return d;
 }
 
@@ -393,15 +416,16 @@ function modulePanelHTML(s) {
   const cur = currentStep(s);
   const doneSteps = steps.filter((x) => x.step.endedAt != null).length;
   const canUndo = doneSteps > 0;
+  const isQuestions = s.mode === 'questions';
 
   if (!cur) {
     return `<section class="panel">
       <div class="cm done-all">
-        <div class="cm-name">全部模块已完成</div>
-        <p class="hint">可以交卷查看分析，也可以撤销上一个模块重新计时。</p>
+        <div class="cm-name">${isQuestions ? '全部题目已完成' : '全部模块已完成'}</div>
+        <p class="hint">可以交卷查看分析，也可以撤销上一${isQuestions ? '题' : '个模块'}重新计时。</p>
         <button class="btn primary big" data-act="submit">交卷并查看分析</button>
       </div>
-      ${canUndo ? '<button class="text-btn dim undo-btn" data-act="undo">↩ 撤销上一个模块</button>' : ''}
+      ${canUndo ? `<button class="text-btn dim undo-btn" data-act="undo">↩ 撤销上一${isQuestions ? '题' : '个模块'}</button>` : ''}
       ${moduleListHTML(s, cur)}
     </section>`;
   }
@@ -418,9 +442,11 @@ function modulePanelHTML(s) {
     <div class="cm">
       <div class="cm-top">
         <span class="cm-label">${
-          isChild
-            ? `模块 ${modIdx + 1}/${s.modules.length} · 子模块 ${cur.childIndex + 1}/${mod.children.length}`
-            : `当前模块 ${modIdx + 1}/${s.modules.length}`
+          isQuestions
+            ? `第 ${modIdx + 1} / ${s.modules.length} 题`
+            : isChild
+              ? `模块 ${modIdx + 1}/${s.modules.length} · 子模块 ${cur.childIndex + 1}/${mod.children.length}`
+              : `当前模块 ${modIdx + 1}/${s.modules.length}`
         }</span>
         <span class="cm-hint"></span>
       </div>
@@ -428,14 +454,29 @@ function modulePanelHTML(s) {
       <div class="cm-name">${esc(cur.step.name)}</div>
       <div class="cm-timer" id="modTimer">00:00</div>
       <div class="cm-target" id="modTarget"></div>
-      <button class="btn primary big" data-act="complete">完成${isChild ? '子模块' : '本模块'} →</button>
+      <button class="btn primary big" data-act="complete">完成${isQuestions ? '本题' : isChild ? '子模块' : '本模块'} →</button>
     </div>
-    ${canUndo ? '<button class="text-btn dim undo-btn" data-act="undo">↩ 撤销上一个模块</button>' : ''}
+    ${canUndo ? `<button class="text-btn dim undo-btn" data-act="undo">↩ 撤销上一${isQuestions ? '题' : '个模块'}</button>` : ''}
     ${moduleListHTML(s, cur)}
   </section>`;
 }
 
 function moduleListHTML(s, cur) {
+  if (s.mode === 'questions' || s.modules.length > 12) {
+    const doneCount = s.modules.filter((m) => isModuleDone(m)).length;
+    return `<div class="scantron-wrap">
+      <div class="scantron-head"><span>答题卡</span><b>${doneCount} / ${s.modules.length}</b></div>
+      <div class="scantron">
+        ${s.modules
+          .map((m, i) => {
+            const done = isModuleDone(m);
+            const active = cur && cur.moduleIndex === i;
+            return `<span class="${done ? 'done' : active ? 'now' : ''}">${i + 1}</span>`;
+          })
+          .join('')}
+      </div>
+    </div>`;
+  }
   const rows = s.modules
     .map((m, i) => {
       const done = isModuleDone(m);
@@ -475,6 +516,49 @@ function moduleListHTML(s, cur) {
 
 /* ------------------------------------------------------------- 结果页 */
 
+/** 逐题模式：每题用时柱状图 + 最慢/最快题 */
+function questionDistributionHTML(a) {
+  const rows = a.rows;
+  const maxMs = Math.max(1, ...rows.map((r) => r.ms));
+  const W = 340;
+  const H = 96;
+  const slot = W / Math.max(1, rows.length);
+  const barW = Math.max(1.5, slot - 1.5);
+  const bars = rows
+    .map((r, i) => {
+      const h = r.ms > 0 ? Math.max(2, (r.ms / maxMs) * (H - 12)) : 1.5;
+      const slowest = a.slowest && r.name === a.slowest.name;
+      return `<rect x="${(i * slot + 0.75).toFixed(1)}" y="${(H - h).toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" rx="1.2" fill="var(--green)" opacity="${slowest ? 1 : 0.55}"/>`;
+    })
+    .join('');
+  const avgY = a.avgModuleMs ? H - (a.avgModuleMs / maxMs) * (H - 12) : null;
+
+  const listHTML = (title, items) => `<div class="q-list">
+      <div class="q-list-head">${title}</div>
+      <ul>${items
+        .map(
+          (r) => `<li><span>${esc(r.name)}</span><b>${fmtMS(r.ms)}</b><i>${pct(r.timeShare)}</i></li>`,
+        )
+        .join('')}</ul>
+    </div>`;
+
+  const slow = rows.slice().sort((x, y) => y.ms - x.ms).slice(0, 5);
+  const fast = rows.filter((r) => r.ms > 0).sort((x, y) => x.ms - y.ms).slice(0, 5);
+
+  return `<section class="card">
+    <div class="card-head"><h2>每题用时</h2><span class="hint">平均 ${a.avgModuleMs != null ? fmtMS(a.avgModuleMs) : '—'}</span></div>
+    <svg class="q-bars" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="每题用时">
+      ${bars}
+      ${avgY != null ? `<line x1="0" y1="${avgY.toFixed(1)}" x2="${W}" y2="${avgY.toFixed(1)}" class="q-avg"/>` : ''}
+    </svg>
+    <div class="q-axis"><span>第 1 题</span><span>第 ${rows.length} 题</span></div>
+    <div class="q-lists">
+      ${listHTML('最慢 5 题', slow)}
+      ${listHTML('最快 5 题', fast)}
+    </div>
+  </section>`;
+}
+
 views.result = () => {
   const s = sessionOf(ui.params.id);
   if (!s) return `<main class="page sub">${pageHead('考试分析')}<p class="empty">记录不存在或已被删除。</p></main>`;
@@ -501,11 +585,13 @@ views.result = () => {
         <div class="stat"><b>${fmtHMS(a.wallMs)}</b><span>考试耗时</span></div>
         <div class="stat"><b class="${remainTone}">${fmtHMS(Math.abs(a.remainMs))}</b><span>${remainLabel}</span></div>
         <div class="stat"><b class="score">${statScore}</b><span>${a.scoreRate != null ? `得分率 ${pct(a.scoreRate, 1)}` : '总分'} ${autoTag}</span></div>
+        ${a.mode === 'questions' ? `<div class="stat"><b>${a.avgModuleMs != null ? fmtMS(a.avgModuleMs) : '—'}</b><span>平均每题</span></div>
+        <div class="stat"><b>${s.modules.length}</b><span>题目数</span></div>` : ''}
       </div>
       ${s.status === 'finished' ? '' : '<p class="hint">这场考试还在进行中。</p>'}
     </section>
 
-    <section class="card">
+    ${a.mode === 'questions' ? questionDistributionHTML(a) : `<section class="card">
       <div class="card-head"><h2>用时分布</h2><span class="hint">合计 ${fmtHMS(a.totalModuleMs)}</span></div>
       <div class="stackbar">
         ${a.rows.map((r) => `<i style="width:${(r.timeShare * 100).toFixed(2)}%;background:${r.color}"></i>`).join('')}
@@ -527,9 +613,11 @@ views.result = () => {
           )
           .join('')}
       </ul>
-    </section>
+    </section>`}
 
-    <section class="card">
+    ${a.mode === 'questions'
+      ? ''
+      : `<section class="card">
       <div class="card-head"><h2>模块明细</h2></div>
       <div class="table-wrap">
         <table class="tbl">
@@ -561,7 +649,7 @@ views.result = () => {
       </div>
       ${a.manualTotal != null && a.allScored && Math.abs(a.derivedTotal - a.manualTotal) > 0.01 ? `<p class="hint warn">模块合计 ${fmtScore(a.derivedTotal)}，手填总分 ${fmtScore(a.manualTotal)}，已按手填为准</p>` : ''}
       ${!a.allScored && a.hasScores ? '<p class="hint">部分模块还没录分，补全后才能算总分。</p>' : ''}
-    </section>
+    </section>`}
 
     ${scoreCardHTML(s, a)}
 
@@ -647,7 +735,9 @@ function scoreCardHTML(s, a) {
         <b id="totalPreview">${a.effectiveTotal != null ? fmtScore(a.effectiveTotal) : '—'}</b>
       </div>
     </div>
-    <div class="score-list">${rows}</div>
+    ${s.mode === 'questions'
+      ? '<p class="hint">逐题模式暂不逐题录分，直接填总得分即可。</p>'
+      : `<div class="score-list">${rows}</div>`}
     <label class="field">
       <span>备注<em>选填</em></span>
       <textarea id="f-note" rows="2" placeholder="这场考试的感受、要改的地方…">${esc(s.note || '')}</textarea>
@@ -1419,24 +1509,26 @@ function startExam() {
   if (existing && !window.confirm('有一场考试还在进行中，开始新考试会放弃它。继续？')) return;
   if (existing) store.removeSession(existing.id);
 
-  const tpl = d.templateId ? store.findTemplate(d.templateId) : null;
-  const source = tpl
-    ? tpl.modules.map((m) => ({
-        name: m.name,
-        maxScore: m.maxScore,
-        questionCount: m.questionCount,
-        perQuestionScore: m.perQuestionScore,
-        suggestedMinutes: m.suggestedMinutes,
-        children: (m.children || []).map((c) => ({
-          name: c.name,
-          questionCount: c.questionCount,
-          perQuestionScore: c.perQuestionScore,
-          suggestedMinutes: c.suggestedMinutes,
-        })),
-      }))
-    : defaultModules(d.moduleCount).map((m) => ({
-        name: m.name, maxScore: null, questionCount: null, perQuestionScore: null, suggestedMinutes: null, children: [],
-      }));
+  const mode = d.mode === 'questions' ? 'questions' : 'modules';
+  const tpl = mode === 'modules' && d.templateId ? store.findTemplate(d.templateId) : null;
+  const normalizeSource = (m) => ({
+    name: m.name,
+    maxScore: m.maxScore,
+    questionCount: m.questionCount,
+    perQuestionScore: m.perQuestionScore,
+    suggestedMinutes: m.suggestedMinutes,
+    children: (m.children || []).map((c) => ({
+      name: c.name,
+      questionCount: c.questionCount,
+      perQuestionScore: c.perQuestionScore,
+      suggestedMinutes: c.suggestedMinutes,
+    })),
+  });
+  const source = mode === 'questions'
+    ? questionModules(d.questionCount).map(normalizeSource)
+    : tpl
+      ? tpl.modules.map(normalizeSource)
+      : defaultModules(d.moduleCount).map(normalizeSource);
   if (!source.length) {
     toast('至少要有一个模块');
     return;
@@ -1447,8 +1539,13 @@ function startExam() {
     id: uid('ses'),
     name: String(d.name || '').trim(),
     templateId: tpl ? tpl.id : null,
-    templateName: tpl ? tpl.name : `默认模块 × ${source.length}`,
+    templateName: tpl
+      ? tpl.name
+      : mode === 'questions'
+        ? `逐题 × ${source.length}`
+        : `默认模块 × ${source.length}`,
     examTemplateId: d.examTemplateId || null,
+    mode,
     plan: {
       startVirtual: startV,
       endVirtual: endV,
@@ -1499,6 +1596,8 @@ function startExam() {
     startVirtual: startV,
     endVirtual: endV,
     moduleCount: d.moduleCount,
+    questionCount: d.questionCount,
+    mode,
     templateId: tpl ? tpl.id : null,
     examTemplateId: d.examTemplateId || null,
     totalScore: numOrNull(d.totalScore),
@@ -1859,7 +1958,19 @@ function onAct(act, el) {
       break;
     case 'mod-count': {
       syncExamDraft();
-      ui.draft.moduleCount = clamp(ui.draft.moduleCount + Number(el.dataset.delta), 2, 8);
+      ui.draft.moduleCount = clamp(ui.draft.moduleCount + Number(el.dataset.delta), 1, 99);
+      render();
+      break;
+    }
+    case 'q-count': {
+      syncExamDraft();
+      ui.draft.questionCount = clamp(ui.draft.questionCount + Number(el.dataset.delta), 1, 200);
+      render();
+      break;
+    }
+    case 'exam-mode': {
+      syncExamDraft();
+      ui.draft.mode = el.dataset.mode === 'questions' ? 'questions' : 'modules';
       render();
       break;
     }
