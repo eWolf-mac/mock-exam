@@ -767,6 +767,36 @@ textarea { resize: vertical; line-height: 1.5; }
 .q-list li b { font-weight: 500; font-variant-numeric: tabular-nums; }
 .q-list li i { font-style: normal; color: var(--muted); width: 34px; text-align: right; font-variant-numeric: tabular-nums; }
 
+/* 柱子可点 + 气泡 */
+.q-bar { cursor: pointer; }
+.q-bar.sel rect:last-child { fill: var(--amber); opacity: 1; }
+.q-bubble {
+  display: none; margin-top: 8px; padding: 8px 10px;
+  border-radius: 10px; background: var(--card-2);
+  font-size: 12px; color: var(--muted);
+}
+.q-bubble.on { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.q-bubble b { color: var(--text); font-weight: 600; }
+.q-bubble span { color: var(--green); font-weight: 600; font-variant-numeric: tabular-nums; }
+.q-bubble i { font-style: normal; margin-left: auto; }
+
+/* 题目用时明细 */
+.q-detail-list { display: flex; flex-direction: column; gap: 6px; }
+.q-detail-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) 62px 40px 70px;
+  align-items: center; gap: 6px; width: 100%;
+  padding: 11px 12px; text-align: left;
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  color: var(--text); font-size: 13px;
+}
+.q-detail-row:active { background: var(--card-2); }
+.qd-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.qd-time { text-align: right; font-variant-numeric: tabular-nums; }
+.qd-share { text-align: right; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.qd-start { text-align: right; color: var(--dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+.q-detail-more { display: none; padding: 7px 14px 10px; font-size: 11px; color: var(--muted); line-height: 1.6; }
+.q-detail-more.open { display: block; }
+
 /* ---------------------------------------------------------- 横屏 */
 
 @media (orientation: landscape) and (max-height: 560px) {

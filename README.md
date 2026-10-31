@@ -45,6 +45,16 @@
     每题单独计时，考试总用时 = 各题之和；题多时模块列表变成**答题卡网格**；
 15. **逐题分析**：平均每题用时、每题用时柱状图（带平均线、最慢题高亮）、最慢 / 最快 5 题。
 
+**v2.4**
+
+16. **每题明细**：点柱状图的柱子看该题用时；「全部题目」进明细页（总用时/平均/中位数，按题号或按用时排序，
+    点行展开开始/结束时刻与排名）；
+17. **逐题文案重写**：不再出现「建议用时/模块得分率」，改成平均每题、最慢最快、超均值题数、前/后半程配速；
+18. **考试模版带结构**：模版可设「按模块」或「按题计时」的默认结构，两种参数都保留；新建考试默认用上次的结构；
+19. **趋势分组更细**：逐题 + 考试模版 → `模版名 · N 题`；逐题 + 自定义 → `逐题 · N 题`；模块模式照旧；
+20. **逐题满分**：不填总分时自动按「每题 1 分 × 题数」，填了得分就能看到得分率；
+21. 修复：从记录页进入考试详情后，返回会跳回首页（现在回到记录页/趋势页来源）。
+
 ---
 
 ## 1. 立刻用起来（Web / PWA）
@@ -72,7 +82,7 @@ node tools/serve.mjs 8123        # 启动本地静态服务（默认目录 web/�
 
 ```bash
 node tools/test-core.mjs     # 纯逻辑单元测试（26 项：时间、二级模块、计分、建议用时、分组、逐题）
-node tools/smoke-dom.mjs     # 端到端流程测试（21 项，DOM 桩驱动真实 app.js）
+node tools/smoke-dom.mjs     # 端到端流程测试（25 项，DOM 桩驱动真实 app.js）
 node tools/shots.mjs         # 重新出图（需 headless Chrome @9222）
 node tools/make-icons.py     # 重新生成图标（需要 Pillow）
 ```
@@ -133,7 +143,7 @@ node tools/make-icons.py     # 重新生成图标（需要 Pillow）
 `docs/shots/15-dark-result.png`、`08-result-score.png`、`11-template-editor.png`、
 `22-history-manage.png`、`23-purge.png`、`21-long-image.png`。
 
-逐题模式（按题计时）见 `25-new-exam-questions.png`、`26-exam-scantron.png`、`28-result-questions.png`。
+逐题模式（按题计时）见 `25-new-exam-questions.png`、`26-exam-scantron.png`、`28-result-questions.png`、`30-question-detail.png`。
 
 ---
 

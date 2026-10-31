@@ -460,6 +460,10 @@ await sleep(400);
 await shot('28-result-questions');
 await evaluate('window.scrollTo(0, 620)');
 await shot('29-result-questions-detail');
+await evaluate('window.scrollTo(0, 0)');
+await click('[data-act="open-questions"]');
+await shot('30-question-detail');
+await click('[data-act="back"]');
 
 /* -------------------------------------------------- 长图（走下载路径） */
 

@@ -273,6 +273,12 @@ test('趋势分组键', () => {
   assert.equal(sessionGroupKey({ examTemplateId: 'e1', templateId: 't1' }), 'e1');
   assert.equal(sessionGroupKey({ examTemplateId: null, templateId: 't1' }), 't1');
   assert.equal(sessionGroupKey({ examTemplateId: null, templateId: null }), '__default__');
+  assert.equal(
+    sessionGroupKey({ mode: 'questions', examTemplateId: 'e1', modules: [{}, {}, {}] }),
+    'q:e1:3',
+    '逐题 + 考试模版 + 题数',
+  );
+  assert.equal(sessionGroupKey({ mode: 'questions', examTemplateId: null, modules: [{}, {}] }), 'q::2');
 });
 
 console.log('建议用时');
@@ -440,7 +446,8 @@ test('逐题模式：analyze 给出平均、最慢、最快', () => {
   assert.equal(a.avgModuleMs, 75000);
   assert.equal(a.slowest.name, '第2题');
   assert.equal(a.fastest.name, '第1题');
-  assert.ok(a.insights.some((t) => t.includes('每题平均')));
+  assert.ok(a.insights.some((t) => t.includes('平均每题')));
+  assert.ok(a.insights.some((t) => t.includes('逐题模式默认不逐题录分')), '没录分时给中性提示');
 });
 
 console.log(`\n通过 ${passed} 项`);

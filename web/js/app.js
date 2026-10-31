@@ -30,6 +30,8 @@ const ui = {
   trendMode: 'score',
   trendGroup: 'all',
   manage: false,
+  prev: 'home',
+  qSort: 'index',
 };
 
 const views = {};
@@ -337,10 +339,11 @@ function applyExamTemplate(id) {
   if (!e) return;
   if (e.startVirtual != null) d.start = msToHM(e.startVirtual);
   if (e.endVirtual != null) d.end = msToHM(e.endVirtual);
+  d.mode = e.mode === 'questions' ? 'questions' : 'modules';
   d.templateId = e.templateId || null;
-  d.moduleCount = clamp(e.moduleCount || 4, 2, 8);
+  d.moduleCount = clamp(e.moduleCount || 4, 1, 99);
+  d.questionCount = clamp(e.questionCount || 20, 1, 200);
   d.totalScore = e.totalScore == null ? '' : String(e.totalScore);
-  if (!d.name.trim()) d.name = '';
 }
 
 /* ------------------------------------------------------------- 考试中 */
@@ -516,8 +519,8 @@ function moduleListHTML(s, cur) {
 
 /* ------------------------------------------------------------- 结果页 */
 
-/** 逐题模式：每题用时柱状图 + 最慢/最快题 */
-function questionDistributionHTML(a) {
+/** 逐题模式：可点的每题用时柱状图 + 最慢/最快题 + 全部题目入口 */
+function questionDistributionHTML(a, sessionId) {
   const rows = a.rows;
   const maxMs = Math.max(1, ...rows.map((r) => r.ms));
   const W = 340;
@@ -528,7 +531,10 @@ function questionDistributionHTML(a) {
     .map((r, i) => {
       const h = r.ms > 0 ? Math.max(2, (r.ms / maxMs) * (H - 12)) : 1.5;
       const slowest = a.slowest && r.name === a.slowest.name;
-      return `<rect x="${(i * slot + 0.75).toFixed(1)}" y="${(H - h).toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" rx="1.2" fill="var(--green)" opacity="${slowest ? 1 : 0.55}"/>`;
+      return `<g class="q-bar" data-act="pick-question" data-i="${i}">
+        <rect x="${(i * slot).toFixed(1)}" y="0" width="${slot.toFixed(1)}" height="${H}" fill="transparent"/>
+        <rect x="${(i * slot + 0.75).toFixed(1)}" y="${(H - h).toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" rx="1.2" fill="var(--green)" opacity="${slowest ? 1 : 0.55}"/>
+      </g>`;
     })
     .join('');
   const avgY = a.avgModuleMs ? H - (a.avgModuleMs / maxMs) * (H - 12) : null;
@@ -546,18 +552,89 @@ function questionDistributionHTML(a) {
   const fast = rows.filter((r) => r.ms > 0).sort((x, y) => x.ms - y.ms).slice(0, 5);
 
   return `<section class="card">
-    <div class="card-head"><h2>每题用时</h2><span class="hint">平均 ${a.avgModuleMs != null ? fmtMS(a.avgModuleMs) : '—'}</span></div>
+    <div class="card-head">
+      <h2>每题用时</h2>
+      <button class="text-btn" data-act="open-questions" data-id="${sessionId}">全部题目</button>
+    </div>
     <svg class="q-bars" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="每题用时">
       ${bars}
       ${avgY != null ? `<line x1="0" y1="${avgY.toFixed(1)}" x2="${W}" y2="${avgY.toFixed(1)}" class="q-avg"/>` : ''}
     </svg>
-    <div class="q-axis"><span>第 1 题</span><span>第 ${rows.length} 题</span></div>
+    <div class="q-axis"><span>第 1 题</span><span>点柱子看该题用时</span><span>第 ${rows.length} 题</span></div>
+    <div class="q-bubble" id="qBubble"></div>
     <div class="q-lists">
       ${listHTML('最慢 5 题', slow)}
       ${listHTML('最快 5 题', fast)}
     </div>
   </section>`;
 }
+
+/** 逐题明细数据：带开始/结束虚拟时刻与排名 */
+function questionRows(s) {
+  const a = analyze(s);
+  const rows = a.rows.map((r, i) => {
+    const m = s.modules[i];
+    const startV = m.startedAt ? s.plan.startVirtual + (m.startedAt - s.startedAt) : null;
+    const endV = m.endedAt ? s.plan.startVirtual + (m.endedAt - s.startedAt) : null;
+    return { ...r, index: i, startV, endV, rank: null };
+  });
+  const timed = rows.filter((r) => r.ms > 0).sort((x, y) => y.ms - x.ms);
+  timed.forEach((r, i) => { r.rank = i + 1; });
+  const times = timed.map((r) => r.ms).sort((x, y) => x - y);
+  const median = times.length
+    ? times.length % 2
+      ? times[(times.length - 1) / 2]
+      : (times[times.length / 2 - 1] + times[times.length / 2]) / 2
+    : null;
+  return { a, rows, timed, median };
+}
+
+views.questionDetail = () => {
+  const s = sessionOf(ui.params.id);
+  if (!s) return `<main class="page sub">${pageHead('题目明细')}<p class="empty">记录不存在或已被删除。</p></main>`;
+  const { a, rows, median } = questionRows(s);
+  const sort = ui.qSort === 'time' ? 'time' : 'index';
+  const list = rows.slice().sort((x, y) => (sort === 'time' ? y.ms - x.ms : x.index - y.index));
+
+  return `<main class="page sub">
+    ${pageHead('题目用时明细')}
+    <section class="card">
+      <div class="stats">
+        <div class="stat"><b>${fmtHMS(a.totalModuleMs)}</b><span>总用时</span></div>
+        <div class="stat"><b>${a.avgModuleMs != null ? fmtMS(a.avgModuleMs) : '—'}</b><span>平均每题</span></div>
+        <div class="stat"><b>${median != null ? fmtMS(median) : '—'}</b><span>中位数</span></div>
+        <div class="stat"><b>${rows.length}</b><span>题数</span></div>
+      </div>
+    </section>
+    <div class="seg">
+      <button class="seg-btn${sort === 'index' ? ' on' : ''}" data-act="q-sort" data-sort="index">按题号</button>
+      <button class="seg-btn${sort === 'time' ? ' on' : ''}" data-act="q-sort" data-sort="time">按用时</button>
+    </div>
+    <ul class="q-detail-list">
+      ${list
+        .map(
+          (r) => `<li>
+            <button class="q-detail-row" data-act="q-expand" data-i="${r.index}">
+              <span class="qd-name">${esc(r.name)}</span>
+              <span class="qd-time">${r.ms > 0 ? fmtMS(r.ms) : '未作答'}</span>
+              <span class="qd-share">${r.ms > 0 ? pct(r.timeShare) : '—'}</span>
+              <span class="qd-start">${r.startV != null ? msToHMS(r.startV) : ''}</span>
+            </button>
+            <div class="q-detail-more" id="qMore-${r.index}">
+              ${
+                r.ms > 0
+                  ? `开始 ${msToHMS(r.startV)} · 结束 ${msToHMS(r.endV)} · 第 ${r.rank || '—'} 慢 · 与平均 ${
+                      r.ms >= (a.avgModuleMs || 0) ? '+' : '-'
+                    }${fmtMS(Math.abs(r.ms - (a.avgModuleMs || 0)))}`
+                  : '这道题没有计时记录'
+              }
+            </div>
+          </li>`,
+        )
+        .join('')}
+    </ul>
+  </main>`;
+};
 
 views.result = () => {
   const s = sessionOf(ui.params.id);
@@ -591,7 +668,7 @@ views.result = () => {
       ${s.status === 'finished' ? '' : '<p class="hint">这场考试还在进行中。</p>'}
     </section>
 
-    ${a.mode === 'questions' ? questionDistributionHTML(a) : `<section class="card">
+    ${a.mode === 'questions' ? questionDistributionHTML(a, s.id) : `<section class="card">
       <div class="card-head"><h2>用时分布</h2><span class="hint">合计 ${fmtHMS(a.totalModuleMs)}</span></div>
       <div class="stackbar">
         ${a.rows.map((r) => `<i style="width:${(r.timeShare * 100).toFixed(2)}%;background:${r.color}"></i>`).join('')}
@@ -726,7 +803,7 @@ function scoreCardHTML(s, a) {
     <div class="card-head"><h2>得分录入</h2><span class="hint">${a.hasScores ? '可随时修改' : '选填'}</span></div>
     <div class="field-row">
       <label class="field">
-        <span>总得分<em>不填则按模块合计</em></span>
+        <span>总得分<em>${s.mode === 'questions' ? '不填只看用时' : '不填则按模块合计'}</em></span>
         <input id="f-total-score" type="number" inputmode="decimal" min="0" step="0.5"
           placeholder="${hasMax ? `满分 ${fmtScore(s.plan.totalScore)}` : '选填'}" value="${s.totalScore == null ? '' : s.totalScore}">
       </label>
@@ -971,8 +1048,10 @@ function examTplDraft(e) {
     name: e ? e.name : '',
     start: e ? msToHM(e.startVirtual) : '09:00',
     end: e ? msToHM(e.endVirtual) : '11:00',
+    mode: e && e.mode === 'questions' ? 'questions' : 'modules',
     templateId: e ? e.templateId : null,
-    moduleCount: e ? e.moduleCount : 4,
+    moduleCount: e ? e.moduleCount || 4 : 4,
+    questionCount: e ? e.questionCount || 20 : 20,
     totalScore: e && e.totalScore != null ? String(e.totalScore) : '',
     returnTo: null,
   };
@@ -1003,27 +1082,46 @@ views.examTplEdit = () => {
         <input id="e-total" type="number" inputmode="decimal" min="0" step="0.5" placeholder="不填也可以" value="${esc(e.totalScore)}">
       </label>
     </section>
+
     <section class="card">
-      <div class="card-head"><h2>默认模块模版</h2></div>
-      <div class="radio-list">
-        ${choices
-          .map(
-            (c) => `<button class="radio-row${(c.id || '') === (e.templateId || '') ? ' on' : ''}" data-act="etpl-pick" data-id="${c.id}">
-              <span class="radio-dot"></span>
-              <span class="radio-body"><b>${esc(c.title)}</b><small>${esc(c.sub)}</small></span>
-            </button>`,
-          )
-          .join('')}
+      <div class="card-head"><h2>默认考试结构</h2></div>
+      <div class="seg">
+        <button class="seg-btn${e.mode !== 'questions' ? ' on' : ''}" data-act="etpl-mode" data-mode="modules">按模块</button>
+        <button class="seg-btn${e.mode === 'questions' ? ' on' : ''}" data-act="etpl-mode" data-mode="questions">按题计时</button>
       </div>
-      ${e.templateId ? '' : `<div class="stepper">
-          <span>模块数量</span>
-          <div>
-            <button class="step-btn" data-act="etpl-count" data-delta="-1" ${e.moduleCount <= 2 ? 'disabled' : ''}>−</button>
-            <b>${e.moduleCount}</b>
-            <button class="step-btn" data-act="etpl-count" data-delta="1" ${e.moduleCount >= 8 ? 'disabled' : ''}>+</button>
-          </div>
-        </div>`}
+      ${
+        e.mode === 'questions'
+          ? `<label class="field">
+              <span>题目数量</span>
+              <div class="num-row">
+                <button class="step-btn" data-act="etpl-qcount" data-delta="-1">−</button>
+                <input id="e-qcount" type="number" inputmode="numeric" min="1" max="200" step="1" value="${e.questionCount}">
+                <button class="step-btn" data-act="etpl-qcount" data-delta="1">+</button>
+              </div>
+            </label>
+            <p class="hint">用这个模版开考时，会自动生成「第 1 题 … 第 N 题」，每题单独计时。</p>`
+          : `<div class="radio-list">
+              ${choices
+                .map(
+                  (c) => `<button class="radio-row${(c.id || '') === (e.templateId || '') ? ' on' : ''}" data-act="etpl-pick" data-id="${c.id}">
+                    <span class="radio-dot"></span>
+                    <span class="radio-body"><b>${esc(c.title)}</b><small>${esc(c.sub)}</small></span>
+                  </button>`,
+                )
+                .join('')}
+            </div>
+            ${e.templateId ? '' : `<label class="field">
+              <span>模块数量<em>可直接输入</em></span>
+              <div class="num-row">
+                <button class="step-btn" data-act="etpl-count" data-delta="-1">−</button>
+                <input id="e-modcount" type="number" inputmode="numeric" min="1" max="99" step="1" value="${e.moduleCount}">
+                <button class="step-btn" data-act="etpl-count" data-delta="1">+</button>
+              </div>
+            </label>`}`
+      }
+      <p class="hint">两种结构的参数都会保留，切换不会丢。</p>
     </section>
+
     <button class="btn primary big" data-act="etpl-save">保存考试模版</button>
     ${e.id ? '<button class="btn danger-ghost" data-act="etpl-delete-current">删除这个考试模版</button>' : ''}
   </main>`;
@@ -1036,10 +1134,14 @@ function syncExamTplDraft() {
   const start = $('#e-start');
   const end = $('#e-end');
   const total = $('#e-total');
+  const modCount = $('#e-modcount');
+  const qCount = $('#e-qcount');
   if (name) e.name = name.value;
   if (start && parseHM(start.value) != null) e.start = start.value;
   if (end && parseHM(end.value) != null) e.end = end.value;
   if (total) e.totalScore = total.value;
+  if (modCount && numOrNull(modCount.value) != null) e.moduleCount = clamp(Math.round(numOrNull(modCount.value)), 1, 99);
+  if (qCount && numOrNull(qCount.value) != null) e.questionCount = clamp(Math.round(numOrNull(qCount.value)), 1, 200);
   return e;
 }
 
@@ -1101,8 +1203,14 @@ function trendGroups(sessions) {
       const g = map.get(key);
       g.sessions.push(s);
       if (!g.label) {
-        const et = store.findExamTemplate(key);
-        g.label = et ? et.name : s.templateName || '默认模块';
+        const q = /^q:(.*):(\d+)$/.exec(key);
+        if (q) {
+          const et = q[1] ? store.findExamTemplate(q[1]) : null;
+          g.label = `${et ? et.name : '逐题'} · ${q[2]} 题`;
+        } else {
+          const et = store.findExamTemplate(key);
+          g.label = et ? et.name : s.templateName || '默认模块';
+        }
       }
     });
   return Array.from(map.values()).sort((a, b) => b.sessions.length - a.sessions.length);
@@ -1550,7 +1658,8 @@ function startExam() {
       startVirtual: startV,
       endVirtual: endV,
       durationMs: durationFor(startV, endV),
-      totalScore: numOrNull(d.totalScore),
+      // 逐题模式：不填总分时默认满分 = 题目数（每题 1 分）
+      totalScore: numOrNull(d.totalScore) ?? (mode === 'questions' ? source.length : null),
     },
     modules: source.map((m) => ({
       id: uid('sm'),
@@ -1894,8 +2003,10 @@ function saveExamTemplate() {
     name,
     startVirtual: startV,
     endVirtual: endV,
+    mode: e.mode === 'questions' ? 'questions' : 'modules',
     templateId: e.templateId || null,
-    moduleCount: clamp(e.moduleCount || 4, 2, 8),
+    moduleCount: clamp(e.moduleCount || 4, 1, 99),
+    questionCount: clamp(e.questionCount || 20, 1, 200),
     totalScore: numOrNull(e.totalScore),
     updatedAt: now,
   };
@@ -1937,6 +2048,10 @@ function onAct(act, el) {
         ui.view = 'history';
       } else if (ui.view === 'purge') {
         ui.view = 'history';
+      } else if (ui.view === 'result') {
+        ui.view = ui.prev || 'history';
+      } else if (ui.view === 'questionDetail') {
+        ui.view = 'result';
       } else {
         ui.view = 'home';
       }
@@ -2006,6 +2121,7 @@ function onAct(act, el) {
       saveScores(el.dataset.id);
       break;
     case 'open-session':
+      ui.prev = ui.view === 'result' ? ui.prev : ui.view;
       ui.view = 'result';
       ui.params = { id: el.dataset.id };
       render();
@@ -2023,6 +2139,36 @@ function onAct(act, el) {
       ui.trendMode = el.dataset.mode || 'score';
       render();
       break;
+    case 'pick-question': {
+      const s = sessionOf(ui.params.id);
+      if (!s) break;
+      const i = Number(el.dataset.i);
+      const { rows } = questionRows(s);
+      const r = rows[i];
+      const box = $('#qBubble');
+      if (box && r) {
+        box.className = 'q-bubble on';
+        box.innerHTML = `<b>${esc(r.name)}</b><span>${fmtMS(r.ms)}</span><i>占 ${pct(r.timeShare)} · 第 ${r.rank || '—'} 慢</i>`;
+      }
+      $$('.q-bar').forEach((g) => g.classList.toggle('sel', Number(g.dataset.i) === i));
+      break;
+    }
+    case 'open-questions':
+      ui.prev = ui.view === 'result' ? ui.prev : ui.view;
+      ui.qSort = 'index';
+      ui.view = 'questionDetail';
+      ui.params = { id: el.dataset.id };
+      render();
+      break;
+    case 'q-sort':
+      ui.qSort = el.dataset.sort === 'time' ? 'time' : 'index';
+      render();
+      break;
+    case 'q-expand': {
+      const more = $(`#qMore-${Number(el.dataset.i)}`);
+      if (more) more.classList.toggle('open');
+      break;
+    }
     case 'trend-group':
       ui.trendGroup = el.dataset.key || 'all';
       render();
@@ -2081,7 +2227,17 @@ function onAct(act, el) {
       break;
     case 'etpl-count':
       syncExamTplDraft();
-      ui.etpl.moduleCount = clamp((ui.etpl.moduleCount || 4) + Number(el.dataset.delta), 2, 8);
+      ui.etpl.moduleCount = clamp((ui.etpl.moduleCount || 4) + Number(el.dataset.delta), 1, 99);
+      render();
+      break;
+    case 'etpl-qcount':
+      syncExamTplDraft();
+      ui.etpl.questionCount = clamp((ui.etpl.questionCount || 20) + Number(el.dataset.delta), 1, 200);
+      render();
+      break;
+    case 'etpl-mode':
+      syncExamTplDraft();
+      ui.etpl.mode = el.dataset.mode === 'questions' ? 'questions' : 'modules';
       render();
       break;
     case 'etpl-save':

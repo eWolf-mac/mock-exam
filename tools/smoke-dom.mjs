@@ -330,6 +330,58 @@ ok('逐题完成两题后交卷', () => {
   assert.ok(html().includes('最慢 5 题'));
 });
 
+ok('每题用时明细页（排序 / 展开）', () => {
+  const s = lastSession();
+  click('go', { view: 'history' });
+  click('open-session', { id: s.id });
+  click('open-questions', { id: s.id });
+  assert.ok(html().includes('题目用时明细'));
+  assert.ok(html().includes('平均每题'));
+  assert.ok(html().includes('中位数'));
+  click('q-sort', { sort: 'time' });
+  assert.ok(html().includes('按用时'));
+  click('q-expand', { i: '0' });
+  click('back');
+  assert.ok(html().includes('每题用时'));
+});
+
+ok('从记录页进详情，返回回到记录页', () => {
+  click('back');
+  assert.ok(html().includes('考试记录'), '不应直接跳回首页');
+});
+
+console.log('考试模版：按题结构');
+
+ok('考试模版支持按题计时', () => {
+  click('go', { view: 'templates' });
+  click('tpl-seg', { kind: 'exams' });
+  click('tpl-new-exam');
+  node('#e-name').value = '30题套卷';
+  node('#e-start').value = '09:00';
+  node('#e-end').value = '11:00';
+  click('etpl-mode', { mode: 'questions' });
+  node('#e-qcount').value = '15';
+  click('etpl-save');
+  const et = db().examTemplates.find((x) => x.name === '30题套卷');
+  assert.ok(et, '模版已保存');
+  assert.equal(et.mode, 'questions');
+  assert.equal(et.questionCount, 15);
+});
+
+ok('用逐题模版开考，满分自动等于题数', () => {
+  const et = db().examTemplates.find((x) => x.name === '30题套卷');
+  click('new-exam');
+  click('pick-exam-template', { id: et.id });
+  node('#f-qcount').value = '15';
+  node('#f-total').value = '';
+  click('start-exam');
+  const s = lastSession();
+  assert.equal(s.mode, 'questions');
+  assert.equal(s.modules.length, 15);
+  assert.equal(s.plan.totalScore, 15, '逐题模式不填总分时默认满分 = 题数');
+  click('submit');
+});
+
 console.log('旧数据升级');
 
 ok('v1 数据自动升级到当前版本', () => {

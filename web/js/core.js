@@ -352,9 +352,13 @@ export function stepSuggestedMs(module, step) {
 
 /* ------------------------------------------------------------ 分组（趋势） */
 
-/** 趋势分组键：优先考试模版，其次模块模版，都没有归为默认 */
+/** 趋势分组键：模块模式按模版；逐题模式按「考试模版 + 题目数」或「题目数」 */
 export function sessionGroupKey(session) {
   if (!session) return '__default__';
+  if (session.mode === 'questions') {
+    const n = Array.isArray(session.modules) ? session.modules.length : 0;
+    return session.examTemplateId ? `q:${session.examTemplateId}:${n}` : `q::${n}`;
+  }
   return session.examTemplateId || session.templateId || '__default__';
 }
 
@@ -533,73 +537,126 @@ export function analyze(session) {
     };
   });
 
+  const mode = session && session.mode === 'questions' ? 'questions' : 'modules';
+  const avgModuleMs = mods.length ? totalModuleMs / mods.length : null;
+  const timed = rows.filter((r) => r.ms > 0).sort((a, b) => b.ms - a.ms);
+  const slowest = timed.length ? { name: timed[0].name, ms: timed[0].ms, index: rows.indexOf(timed[0]) } : null;
+  const fastest = timed.length
+    ? { name: timed[timed.length - 1].name, ms: timed[timed.length - 1].ms, index: rows.indexOf(timed[timed.length - 1]) }
+    : null;
+
   const insights = [];
-  if (rows.length) {
-    const byTime = rows.slice().sort((a, b) => b.ms - a.ms);
-    if (byTime[0].ms > 0) {
+
+  if (mode === 'questions') {
+    /* ---------------- 逐题模式：只讲每题用时，不提模块/建议用时 ---------------- */
+    if (timed.length >= 2) {
+      const ratio = fastest.ms > 0 ? Math.round(slowest.ms / fastest.ms) : null;
       insights.push(
-        `用时最多的是「${byTime[0].name}」，${fmtMS(byTime[0].ms)}，占总用时 ${pct(byTime[0].timeShare)}。`,
+        `平均每题 ${fmtMS(avgModuleMs)}；最慢「${slowest.name}」${fmtMS(slowest.ms)}，最快「${fastest.name}」${fmtMS(fastest.ms)}${ratio && ratio >= 2 ? `，相差约 ${ratio} 倍` : ''}。`,
       );
-    }
-  }
 
-  const overrun = rows
-    .filter((r) => r.overrunMs != null && r.overrunMs > 60000)
-    .sort((a, b) => b.overrunMs - a.overrunMs);
-  if (overrun.length) {
-    const r = overrun[0];
-    insights.push(
-      `「${r.name}」比建议用时多花了 ${fmtHuman(r.overrunMs)}（建议 ${fmtMS(r.suggestedMs)}，实际 ${fmtMS(r.ms)}），是超时最明显的模块。`,
-    );
-  } else if (rows.some((r) => r.overrunMs != null)) {
-    insights.push('所有模块都没有超过建议用时，节奏控制得不错。');
-  }
-
-  const speeds = rows.filter((r) => r.avgPerQuestionMs != null && r.avgPerQuestionMs > 0);
-  if (speeds.length >= 2) {
-    const slow = speeds.slice().sort((a, b) => b.avgPerQuestionMs - a.avgPerQuestionMs)[0];
-    const fast = speeds.slice().sort((a, b) => a.avgPerQuestionMs - b.avgPerQuestionMs)[0];
-    insights.push(
-      `平均每题：最慢「${slow.name}」${fmtPerQuestion(slow.avgPerQuestionMs)}/题，最快「${fast.name}」${fmtPerQuestion(fast.avgPerQuestionMs)}/题。`,
-    );
-  }
-
-  if (hasScores) {
-    const withRate = rows.filter((r) => r.rate != null);
-    if (withRate.length >= 2) {
-      const best = withRate.slice().sort((a, b) => b.rate - a.rate)[0];
-      const worst = withRate.slice().sort((a, b) => a.rate - b.rate)[0];
-      const gap = Math.round((best.rate - worst.rate) * 100);
-      insights.push(
-        `得分率最高的是「${best.name}」${pct(best.rate)}，最低的是「${worst.name}」${pct(worst.rate)}，相差 ${gap} 个百分点。`,
-      );
-    }
-    if (allScored && derivedTotal > 0) {
-      const mismatch = rows
-        .filter((r) => r.timeShare - (r.scoreShare || 0) > 0.1)
-        .sort((a, b) => b.timeShare - b.scoreShare - (a.timeShare - a.scoreShare));
-      if (mismatch.length) {
-        const r = mismatch[0];
-        const excess = totalModuleMs * (r.timeShare - r.scoreShare);
-        const cut = Math.max(3, Math.round(excess / 60000));
+      const above = timed.filter((r) => r.ms > avgModuleMs);
+      if (above.length && above.length < timed.length) {
+        const sum = above.reduce((a, r) => a + r.ms, 0);
         insights.push(
-          `「${r.name}」用了 ${pct(r.timeShare)} 的时间，只换来 ${pct(r.scoreShare)} 的分数，是当前性价比最低的部分，建议压缩约 ${cut} 分钟。`,
+          `超过平均用时的有 ${above.length} 道，合计 ${fmtMS(sum)}，占总用时 ${pct(sum / totalModuleMs)}——时间主要花在这几道上。`,
         );
       }
-      const strong = rows
-        .filter((r) => (r.scoreShare || 0) - r.timeShare > 0.1)
-        .sort((a, b) => b.scoreShare - b.timeShare - (a.scoreShare - a.timeShare));
-      if (strong.length) {
-        const r = strong[0];
-        insights.push(
-          `「${r.name}」产出较高（用时占 ${pct(r.timeShare)}，得分占 ${pct(r.scoreShare)}），模考时应优先保证它的时间。`,
-        );
+
+      const ordered = rows.filter((r) => r.ms > 0);
+      if (ordered.length >= 4) {
+        const mid = Math.floor(ordered.length / 2);
+        const firstMs = ordered.slice(0, mid).reduce((a, r) => a + r.ms, 0);
+        const secondMs = ordered.slice(mid).reduce((a, r) => a + r.ms, 0);
+        const diff = secondMs - firstMs;
+        if (Math.abs(diff) >= 60000) {
+          insights.push(
+            `前半程（前 ${mid} 题）${fmtMS(firstMs)}，后半程（后 ${ordered.length - mid} 题）${fmtMS(secondMs)}，${
+              diff > 0 ? '后半程更慢，收尾阶段别松劲' : '前半程更慢，开场进入状态偏久'
+            }。`,
+          );
+        }
       }
-    } else if (!allScored) {
-      insights.push('部分模块还没有录入正确题数或得分，补全后可以看到完整的「投入产出」对比。');
+    }
+
+    if (effectiveTotal != null) {
+      insights.push(
+        `总得分 ${fmtScore(effectiveTotal)}${totalScoreMax ? ` / ${fmtScore(totalScoreMax)}` : ''}${
+          scoreRate != null ? `，得分率 ${pct(scoreRate, 1)}` : ''
+        }。`,
+      );
+    } else {
+      insights.push('逐题模式默认不逐题录分，在下方填一个总得分就能看到得分率。');
     }
   } else {
-    insights.push('还没有录入得分。补录正确题数或模块得分后，可以看到得分率与投入产出分析。');
+    /* ---------------- 模块模式：原逻辑 ---------------- */
+    if (rows.length) {
+      const byTime = rows.slice().sort((a, b) => b.ms - a.ms);
+      if (byTime[0].ms > 0) {
+        insights.push(
+          `用时最多的是「${byTime[0].name}」，${fmtMS(byTime[0].ms)}，占总用时 ${pct(byTime[0].timeShare)}。`,
+        );
+      }
+    }
+
+    const overrun = rows
+      .filter((r) => r.overrunMs != null && r.overrunMs > 60000)
+      .sort((a, b) => b.overrunMs - a.overrunMs);
+    if (overrun.length) {
+      const r = overrun[0];
+      insights.push(
+        `「${r.name}」比建议用时多花了 ${fmtHuman(r.overrunMs)}（建议 ${fmtMS(r.suggestedMs)}，实际 ${fmtMS(r.ms)}），是超时最明显的模块。`,
+      );
+    } else if (rows.some((r) => r.overrunMs != null)) {
+      insights.push('所有模块都没有超过建议用时，节奏控制得不错。');
+    }
+
+    const speeds = rows.filter((r) => r.avgPerQuestionMs != null && r.avgPerQuestionMs > 0);
+    if (speeds.length >= 2) {
+      const slow = speeds.slice().sort((a, b) => b.avgPerQuestionMs - a.avgPerQuestionMs)[0];
+      const fast = speeds.slice().sort((a, b) => a.avgPerQuestionMs - b.avgPerQuestionMs)[0];
+      insights.push(
+        `平均每题：最慢「${slow.name}」${fmtPerQuestion(slow.avgPerQuestionMs)}/题，最快「${fast.name}」${fmtPerQuestion(fast.avgPerQuestionMs)}/题。`,
+      );
+    }
+
+    if (hasScores) {
+      const withRate = rows.filter((r) => r.rate != null);
+      if (withRate.length >= 2) {
+        const best = withRate.slice().sort((a, b) => b.rate - a.rate)[0];
+        const worst = withRate.slice().sort((a, b) => a.rate - b.rate)[0];
+        const gap = Math.round((best.rate - worst.rate) * 100);
+        insights.push(
+          `得分率最高的是「${best.name}」${pct(best.rate)}，最低的是「${worst.name}」${pct(worst.rate)}，相差 ${gap} 个百分点。`,
+        );
+      }
+      if (allScored && derivedTotal > 0) {
+        const mismatch = rows
+          .filter((r) => r.timeShare - (r.scoreShare || 0) > 0.1)
+          .sort((a, b) => b.timeShare - b.scoreShare - (a.timeShare - a.scoreShare));
+        if (mismatch.length) {
+          const r = mismatch[0];
+          const excess = totalModuleMs * (r.timeShare - r.scoreShare);
+          const cut = Math.max(3, Math.round(excess / 60000));
+          insights.push(
+            `「${r.name}」用了 ${pct(r.timeShare)} 的时间，只换来 ${pct(r.scoreShare)} 的分数，是当前性价比最低的部分，建议压缩约 ${cut} 分钟。`,
+          );
+        }
+        const strong = rows
+          .filter((r) => (r.scoreShare || 0) - r.timeShare > 0.1)
+          .sort((a, b) => b.scoreShare - b.timeShare - (a.scoreShare - a.timeShare));
+        if (strong.length) {
+          const r = strong[0];
+          insights.push(
+            `「${r.name}」产出较高（用时占 ${pct(r.timeShare)}，得分占 ${pct(r.scoreShare)}），模考时应优先保证它的时间。`,
+          );
+        }
+      } else if (!allScored) {
+        insights.push('部分模块还没有录入正确题数或得分，补全后可以看到完整的「投入产出」对比。');
+      }
+    } else {
+      insights.push('还没有录入得分。补录正确题数或模块得分后，可以看到得分率与投入产出分析。');
+    }
   }
 
   if (session && session.finishedAt) {
@@ -610,21 +667,9 @@ export function analyze(session) {
     }
   }
 
-  if (manualTotal != null && allScored && Math.abs(derivedTotal - manualTotal) > 0.01) {
+  if (mode !== 'questions' && manualTotal != null && allScored && Math.abs(derivedTotal - manualTotal) > 0.01) {
     insights.push(
       `各模块得分合计 ${fmtScore(derivedTotal)}，与手填总得分 ${fmtScore(manualTotal)} 不一致，已按手填总分为准。`,
-    );
-  }
-
-  const mode = session && session.mode === 'questions' ? 'questions' : 'modules';
-  const avgModuleMs = mods.length ? totalModuleMs / mods.length : null;
-  const timed = rows.filter((r) => r.ms > 0).sort((a, b) => b.ms - a.ms);
-  const slowest = timed.length ? { name: timed[0].name, ms: timed[0].ms, index: rows.indexOf(timed[0]) } : null;
-  const fastest = timed.length ? { name: timed[timed.length - 1].name, ms: timed[timed.length - 1].ms, index: rows.indexOf(timed[timed.length - 1]) } : null;
-
-  if (mode === 'questions' && timed.length >= 2) {
-    insights.push(
-      `每题平均 ${fmtMS(avgModuleMs)}；最慢「${slowest.name}」${fmtMS(slowest.ms)}，最快「${fastest.name}」${fmtMS(fastest.ms)}，相差 ${fmtMS(slowest.ms - fastest.ms)}。`,
     );
   }
 
